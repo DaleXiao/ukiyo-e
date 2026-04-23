@@ -40,9 +40,12 @@ interface PromptVariant {
   moodWord: string;
 }
 
+// v1.0 returned variant_a + variant_b (two masters). v1.1 returns a single
+// variant — the master is now picked by the user via 4-chip UI (F3), and
+// hstack/promptB is gone (F1). Kept the wrapper interface so the
+// prompt-extender LLM call can still keep its JSON schema explicit.
 interface PromptResponse {
-  variant_a: PromptVariant;
-  variant_b: PromptVariant;
+  variant: PromptVariant;
 }
 
 interface QueueTask {
@@ -51,7 +54,16 @@ interface QueueTask {
   ip: string;
   isTestMode: boolean;
   promptModel: string;
+  // v1.1 (T-079 F3): user-selected master from 4-chip UI. Always one of
+  // the 4 valid StyleWords; defaults to 'hokusai' (Cindy spec). Worker
+  // skips the LLM master-pick step and feeds this straight into the
+  // detail-fill LLM call.
+  master: StyleWord;
   status: "queued" | "generating" | "complete" | "error";
+  // v1.1 (T-079 F1): single-image generation. icons[] retained as an
+  // array of length 1 to preserve the SSE icon_ready event shape (so an
+  // older mobile client mid-session doesn't crash on schema change), but
+  // the queue/DO will only ever push exactly one entry with index:0.
   icons: Array<{ url: string; index: number }>;
   remaining?: number;
   errorMessage?: string;
@@ -82,6 +94,15 @@ const CORS_HEADERS: Record<string, string> = {
 const MAX_QUEUE_SIZE = 10;
 const TASK_TIMEOUT_MS = 120_000;
 
+// T-079 B2: per-task result cache TTL for the polling fallback. 5 minutes is
+// the SPEC.md value (long enough for iOS Safari lock-screen reconnect, short
+// enough that stale tasks don't accumulate in KV beyond their useful window).
+const TASK_CACHE_TTL_SECONDS = 300;
+
+function taskCacheKey(taskId: string): string {
+  return `task:${taskId}`;
+}
+
 const STYLE_MAP: Record<StyleWord, { name: string; preamble: string; styleNotes: string; outputQuality: string }> = {
   yoshitoshi: {
     name: 'Yoshitoshi Tsukioka (月冈芳年)',
@@ -109,74 +130,58 @@ const STYLE_MAP: Record<StyleWord, { name: string; preamble: string; styleNotes:
   },
 };
 
-const KIMI_SYSTEM_PROMPT = `You are an elite Ukiyo-e wallpaper art director. Given a short scene description (any language) from a user, you produce TWO genuinely different visual interpretations as structured JSON, each in the style of a different Ukiyo-e master.
+// v1.1 (T-079 F3): user picks the master via 4-chip UI, so the LLM no longer
+// chooses between masters — it just fills in the 5 narrative slots
+// (centralFocus / environment / colorMaterial / atmosphere / moodWord) for the
+// pre-selected master. Single output `variant`, not variant_a/variant_b.
+// The CHOSEN_MASTER literal is interpolated into this template per-request so
+// the LLM has explicit instructions about which master's idiom to honour
+// (vs trying to be "master-aware" with conditional logic in one big prompt).
+const KIMI_SYSTEM_PROMPT_TEMPLATE = `You are an elite Ukiyo-e wallpaper art director. Given a short scene description (any language) from a user, you produce a single visual interpretation as structured JSON, in the style of a SPECIFIC, PRE-SELECTED Ukiyo-e master.
 
-━━━ CORE PRINCIPLE ━━━
-The user provides a SCENE NAME (人物/地点/主题). Your job is to interpret it through TWO different masters' aesthetic lenses, fleshing out the missing visual details so the image model can render a museum-quality vertical mobile wallpaper.
+━━━ SELECTED MASTER ━━━
+This request is for: "{{MASTER}}"
+You must use this master's voice exclusively. Do NOT pick a different master.
 
-━━━ THE FOUR MASTERS ━━━
+━━━ THE FOUR MASTERS (reference) ━━━
 • "yoshitoshi" — 月冈芳年. Dramatic, intense, sometimes macabre. Best for: warriors, supernatural, psychological tension, struggle, ghosts.
 • "utamaro" — 喜多川歌麿. Sensual, refined, intimate close-up portraiture (Bijin-ga). Best for: solo elegant figures, beauty, courtesans, intimate moments.
 • "hokusai" — 葛饰北斋. Geometric, sublime, dominant Prussian Blue (Aizuri-e). Best for: landscapes, nature, weather, mountains, waves, serene grandeur.
 • "kuniyoshi" — 歌川国芳. Dynamic, mythical, heroic warrior prints (Musha-e). Best for: legendary heroes, action, mythical beasts, epic battles.
 
-━━━ SELECTION RULE ━━━
-1. CHOOSE TWO DIFFERENT MASTERS for variant_a and variant_b. Pick the two that best fit the scene from different angles. Avoid forcing all four; only pick the two strongest.
-2. RELEVANCE FIRST — a user should immediately say "yes, this captures THAT scene". Don't sacrifice relevance for novelty.
-3. The two variants explore the SAME scene from genuinely different aesthetic angles — e.g. one Hokusai serene-landscape interpretation + one Kuniyoshi dynamic-heroic interpretation of "Mount Fuji at dawn".
+━━━ CORE PRINCIPLE ━━━
+The user provides a SCENE NAME (人物/地点/主题). Your job is to flesh out the missing visual details so the image model can render a museum-quality vertical mobile wallpaper IN THE "{{MASTER}}" IDIOM. Even if the scene seems atypical for this master, lean into how this master would interpret it (e.g. utamaro doing a landscape → it becomes a Bijin-ga where the landscape is a backdrop for an intimate figure).
 
 ━━━ OUTPUT FIELDS (ALL REQUIRED) ━━━
-For each variant, fill these four narrative slots in vivid, specific English (the image model speaks English best):
+Fill these five narrative slots in vivid, specific English (the image model speaks English best):
 
 • centralFocus — the precise figure(s)/action(s). Specific pose, gesture, expression. "a lone samurai mid-strike with sword raised, kimono billowing" not "a samurai".
 • environment — the wider setting framing the figure. Specific architectural/natural elements that ground the scene.
-• colorMaterial — dominant palette + textural hints, in MASTER-APPROPRIATE language. Examples: Hokusai = "dominant Prussian Blue (Aizuri-e) tones mixed with pale yellows and vintage paper warmth"; Yoshitoshi = "deep crimsons and dark indigoes against murky grays".
+• colorMaterial — dominant palette + textural hints, in {{MASTER}}-APPROPRIATE language. Examples: hokusai = "dominant Prussian Blue (Aizuri-e) tones mixed with pale yellows and vintage paper warmth"; yoshitoshi = "deep crimsons and dark indigoes against murky grays"; utamaro = "soft mineral pigments, ochre and rouge, on warm cream paper"; kuniyoshi = "saturated reds and bold blacks, dynamic high-contrast composition".
 • atmosphere — dynamic/mood elements: line quality, motion, weather, particles, fabric flow.
-
-━━━ FEW-SHOT EXAMPLES ━━━
-
-【User input: "富士山日出"】
-→ variant_a master: hokusai (主要 — 山水/宁静/Aizuri 蓝)
-→ variant_b master: kuniyoshi (补补 — 动感云霉与气势)
-
-【User input: "雨夜独行的武士"】
-→ variant_a master: yoshitoshi (心理张力/阴暗氛围)
-→ variant_b master: kuniyoshi (英雄作姿/动感)
-
-【User input: "春日下的歌伎"】
-→ variant_a master: utamaro (Bijin-ga 主场)
-→ variant_b master: hokusai (背景公园与樱花主导)
-
-【User input: "龙与剧潮"】
-→ variant_a master: hokusai (几何浪装饰/Aizuri)
-→ variant_b master: kuniyoshi (龙的动势与袁德传说)
+• moodWord — single English mood word capturing the overall feeling.
 
 ━━━ SELF-CHECK BEFORE OUTPUT ━━━
-☑ Did I pick TWO DIFFERENT masters?
-☑ Are both variants genuinely interpreting the user's scene (not drifting)?
-☑ Is each variant's colorMaterial idiomatic to its chosen master (Aizuri blue for Hokusai, etc.)?
+☑ Did I keep master = "{{MASTER}}" (not pick a different one)?
+☑ Is the colorMaterial idiomatic to {{MASTER}} specifically?
 ☑ Are centralFocus and environment specific enough that the image model has no ambiguity?
 
 ━━━ OUTPUT FORMAT ━━━
 Output ONLY valid JSON (no markdown fences, no commentary):
 {
-  "variant_a": {
-    "master": "yoshitoshi | utamaro | hokusai | kuniyoshi",
+  "variant": {
+    "master": "{{MASTER}}",
     "centralFocus": "specific figure(s) + action + expression",
     "environment": "specific wider setting",
-    "colorMaterial": "master-appropriate palette + textural hints",
+    "colorMaterial": "{{MASTER}}-appropriate palette + textural hints",
     "atmosphere": "motion, weather, line quality, fabric flow",
     "moodWord": "single english mood word"
-  },
-  "variant_b": {
-    "master": "DIFFERENT from variant_a",
-    "centralFocus": "...",
-    "environment": "...",
-    "colorMaterial": "...",
-    "atmosphere": "...",
-    "moodWord": "..."
   }
 }`;
+
+function buildKimiSystemPrompt(master: StyleWord): string {
+  return KIMI_SYSTEM_PROMPT_TEMPLATE.replace(/\{\{MASTER\}\}/g, master);
+}
 
 // --- Helper functions ---
 
@@ -263,17 +268,23 @@ The scene specialize in ${m.styleNotes.replace(/^[a-zA-Z]/, c => c)} ${v.colorMa
 ${m.outputQuality}`;
 }
 
-async function synthesizePrompts(
+// v1.1 (T-079 F1+F3): single-prompt synthesis. master is now an explicit
+// argument (user-picked from 4-chip UI, validated upstream); LLM only fills
+// the 5 narrative slots. Returns a single assembled prompt string instead of
+// a tuple. Old call site that destructured [promptA, promptB] is gone
+// (single-image generation, no hstack/promptB leg).
+async function synthesizePrompt(
   description: string,
+  master: StyleWord,
   apiKey: string,
   model: string = KIMI_MODEL
-): Promise<[string, string]> {
+): Promise<string> {
   const requestBody: KimiChatRequest = {
     model,
     temperature: 0.8,
     enable_thinking: true,
     messages: [
-      { role: "system", content: KIMI_SYSTEM_PROMPT },
+      { role: "system", content: buildKimiSystemPrompt(master) },
       { role: "user", content: description },
     ],
   };
@@ -323,27 +334,26 @@ async function synthesizePrompts(
     throw new Error(`Failed to parse Kimi response as JSON: ${content}`);
   }
 
-  const validMasters: StyleWord[] = ['yoshitoshi', 'utamaro', 'hokusai', 'kuniyoshi'];
-  for (const key of ["variant_a", "variant_b"] as const) {
-    const v = parsed[key];
-    if (
-      !v?.master ||
-      !v?.centralFocus ||
-      !v?.environment ||
-      !v?.colorMaterial ||
-      !v?.atmosphere ||
-      !v?.moodWord
-    ) {
-      throw new Error(
-        `Kimi response missing required fields in ${key}: ${JSON.stringify(v)}`
-      );
-    }
-    if (!validMasters.includes(v.master)) {
-      v.master = 'hokusai';
-    }
+  const v = parsed.variant;
+  if (
+    !v?.master ||
+    !v?.centralFocus ||
+    !v?.environment ||
+    !v?.colorMaterial ||
+    !v?.atmosphere ||
+    !v?.moodWord
+  ) {
+    throw new Error(
+      `Kimi response missing required fields in variant: ${JSON.stringify(v)}`
+    );
   }
+  // Force the user-selected master even if the LLM tried to drift. The chip
+  // selection is the source of truth (T-079 F3 acceptance: "默认葛饰北斋高亮,
+  // 切换正常"). Override is silent rather than throwing because the prompt
+  // body LLM produced is still scene-relevant; only the master tag drifted.
+  v.master = master;
 
-  return [assemblePrompt(parsed.variant_a), assemblePrompt(parsed.variant_b)];
+  return assemblePrompt(v);
 }
 
 // --- Image generation ---
@@ -371,7 +381,13 @@ async function generateIcon(
           ],
         },
         parameters: {
-          size: "720*1560",
+          // T-079 F5: iPhone 17 Pro Max native resolution. Probe verified
+          // wan2.7-image-pro accepts "1320*2868". Output PNG ~2.5MB; we don't
+          // downscale on the worker side — spec acceptance is "下载图片实测分辨率
+          // 为 1320×2868". The image bytes flow through dashscope's CDN URL
+          // (worker only stores the URL), so the worker bandwidth cost is
+          // unchanged regardless of pixel count.
+          size: "1320*2868",
           n: 1,
           seed: Math.floor(Math.random() * 2147483647),
           prompt_extend: false,
@@ -466,6 +482,7 @@ export class GenerationQueue {
       ip: string;
       isTestMode: boolean;
       promptModel: string;
+      master: StyleWord;  // T-079 F3: validated upstream in handleGenerate
     };
 
     // Clean up timed-out tasks
@@ -489,6 +506,7 @@ export class GenerationQueue {
       ip: body.ip,
       isTestMode: body.isTestMode,
       promptModel: body.promptModel || KIMI_MODEL,
+      master: body.master,
       status: "queued",
       icons: [],
       createdAt: Date.now(),
@@ -540,7 +558,7 @@ export class GenerationQueue {
           } else if (task.status === "generating") {
             await writer.write(
               encoder.encode(
-                `event: generating\ndata: ${JSON.stringify({ index: task.currentIconIndex ?? 0, total: 2 })}\n\n`
+                `event: generating\ndata: ${JSON.stringify({ index: task.currentIconIndex ?? 0, total: 1 })}\n\n`
               )
             );
             // Send any already-completed icons
@@ -654,27 +672,25 @@ export class GenerationQueue {
         // Mark as generating
         task.status = "generating";
         task.currentIconIndex = 0;
-        this.sendToTask(task.taskId, "generating", { index: 0, total: 2 });
+        // T-079 F1: total=1 (single image). Old client may still expect
+        // total=2 in payload but the SSE event shape is forward-compatible
+        // (extra fields ignored).
+        this.sendToTask(task.taskId, "generating", { index: 0, total: 1 });
 
-        // Step 1: Synthesize prompts via Kimi
-        const [promptA, promptB] = await synthesizePrompts(
+        // Step 1: Synthesize a single prompt for the user-selected master
+        // (T-079 F1+F3 — no more variant_a/variant_b LLM call, no master pick)
+        const prompt = await synthesizePrompt(
           task.description,
+          task.master,
           this.env.DASHSCOPE_API_KEY,
           task.promptModel
         );
 
-        // Step 2: Generate both icons concurrently
+        // Step 2: Generate one icon
         await this.waitForCooldown();
-        const genIcon = async (prompt: string, index: number) => {
-          const url = await generateIcon(prompt, this.env.DASHSCOPE_API_KEY);
-          task.icons.push({ url, index });
-          this.sendToTask(task.taskId, "icon_ready", { url, index });
-          return url;
-        };
-        await Promise.all([
-          genIcon(promptA, 0),
-          genIcon(promptB, 1),
-        ]);
+        const url = await generateIcon(prompt, this.env.DASHSCOPE_API_KEY);
+        task.icons.push({ url, index: 0 });
+        this.sendToTask(task.taskId, "icon_ready", { url, index: 0 });
         this.lastDashscopeFinishedAt = Date.now();
 
         // Step 4: Increment rate limit (deferred billing)
@@ -689,6 +705,25 @@ export class GenerationQueue {
           icons: task.icons,
           remaining,
         });
+
+        // T-079 B2: persist final result to KV with TTL=5min so the polling
+        // fallback (GET /api/task/:taskId) can pick up the result even after
+        // mobile Safari kills the SSE connection on screen lock. The DO's
+        // in-memory completedTasks map already serves the same role for
+        // same-DO-instance reads, but Workers may spin up a fresh DO pod
+        // for the polling request, so KV is the durable bridge.
+        try {
+          const cacheKey = taskCacheKey(task.taskId);
+          await this.env.RATE_LIMIT.put(
+            cacheKey,
+            JSON.stringify({ state: "complete", icons: task.icons, remaining }),
+            { expirationTtl: TASK_CACHE_TTL_SECONDS }
+          );
+        } catch (kvErr) {
+          // Non-fatal: poll endpoint will return 404, frontend will keep SSE
+          // reconnect path active. Don't block the user-visible 'complete'.
+          console.error("task cache write failed (complete):", kvErr);
+        }
       } catch (error) {
         console.error("Generation failed:", error);
         const errMsg = error instanceof Error ? error.message : String(error);
@@ -702,6 +737,19 @@ export class GenerationQueue {
           ? "服务器繁忙，请等待 30 秒后重试"
           : "生成失败，请稍后重试";
         this.sendToTask(task.taskId, "error", { message: task.errorMessage });
+
+        // T-079 B2: persist error state to KV too so polling fallback can
+        // surface the failure even after SSE drop.
+        try {
+          const cacheKey = taskCacheKey(task.taskId);
+          await this.env.RATE_LIMIT.put(
+            cacheKey,
+            JSON.stringify({ state: "error", error: task.errorMessage }),
+            { expirationTtl: TASK_CACHE_TTL_SECONDS }
+          );
+        } catch (kvErr) {
+          console.error("task cache write failed (error):", kvErr);
+        }
       }
 
       // Keep completed/errored task in queue briefly for SSE reconnection
@@ -809,9 +857,9 @@ async function handleGenerate(
   request: Request,
   env: Env
 ): Promise<Response> {
-  let body: { description?: string };
+  let body: { description?: string; master?: string };
   try {
-    body = (await request.json()) as { description?: string };
+    body = (await request.json()) as { description?: string; master?: string };
   } catch {
     return jsonResponse(
       { error: "invalid_input", message: "请提供有效的 JSON 请求体" },
@@ -826,6 +874,15 @@ async function handleGenerate(
       400
     );
   }
+
+  // T-079 F3: validate master against the 4-master allowlist; default to
+  // hokusai per spec when missing/invalid (silently — no 400, the chip UI
+  // is the source of truth and any drift is a frontend bug we can recover
+  // from server-side without breaking the user's request).
+  const validMasters: StyleWord[] = ["yoshitoshi", "utamaro", "hokusai", "kuniyoshi"];
+  const master: StyleWord = validMasters.includes(body.master as StyleWord)
+    ? (body.master as StyleWord)
+    : "hokusai";
 
   const ip = getClientIP(request);
   const url = new URL(request.url);
@@ -855,7 +912,7 @@ async function handleGenerate(
     new Request("https://do/enqueue", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ taskId, description, ip, isTestMode, promptModel }),
+      body: JSON.stringify({ taskId, description, ip, isTestMode, promptModel, master }),
     })
   );
 
@@ -930,6 +987,94 @@ async function handleQuota(
   });
 }
 
+// T-079 B2: GET /api/task/:taskId polling fallback. iOS Safari kills SSE
+// when the screen locks; the frontend (App.tsx) detects this via
+// `visibilitychange` and switches to 5s polling against this endpoint until
+// the page is visible again. The contract:
+//
+//   200 {state: "complete", icons: [{url, index:0}], remaining}
+//   200 {state: "error", error: string}
+//   200 {state: "queued"|"generating"} when DO has it but it's not done
+//   404 {state: "unknown"} when neither DO nor KV cache has the task
+//
+// Reads are layered: DO first (covers in-flight tasks while still in queue
+// or being generated), KV second (covers post-completion cleanup window).
+// KV TTL=5min matches DO completedTasks holding window so the bridge is
+// seamless even if a different DO pod handles the polling request.
+async function handleTaskStatus(
+  _request: Request,
+  env: Env,
+  taskId: string
+): Promise<Response> {
+  if (!taskId || !/^task_[a-z0-9_]+$/i.test(taskId)) {
+    return jsonResponse(
+      { error: "invalid_taskId", message: "任务 ID 格式不正确" },
+      400
+    );
+  }
+
+  // Step 1: ask the DO (in-memory queue + completed holding area).
+  const doId = env.GENERATION_QUEUE.idFromName("singleton");
+  const doStub = env.GENERATION_QUEUE.get(doId);
+  type DOStatus = {
+    taskId: string;
+    status: "queued" | "generating" | "complete" | "error";
+    position: number;
+    icons: Array<{ url: string; index: number }>;
+    remaining?: number;
+    errorMessage?: string;
+  };
+  let doData: DOStatus | null = null;
+  try {
+    const doResponse = await doStub.fetch(
+      new Request(`https://do/status?taskId=${encodeURIComponent(taskId)}`, { method: "GET" })
+    );
+    if (doResponse.ok) {
+      doData = (await doResponse.json()) as DOStatus;
+    }
+  } catch (e) {
+    // DO unreachable — fall through to KV. Don't fail the polling request,
+    // it'll just feel slightly stale (KV is the durable bridge).
+    console.error("DO status fetch failed:", e);
+  }
+
+  if (doData && doData.taskId) {
+    if (doData.status === "complete") {
+      return jsonResponse({
+        state: "complete",
+        icons: doData.icons,
+        remaining: doData.remaining,
+      });
+    }
+    if (doData.status === "error") {
+      return jsonResponse({
+        state: "error",
+        error: doData.errorMessage || "生成失败，请重试",
+      });
+    }
+    return jsonResponse({ state: doData.status });
+  }
+
+  // Step 2: KV fallback. The DO writes the final state under task:<id> on
+  // complete or error; this is what survives DO eviction or pod migration.
+  try {
+    const cached = await env.RATE_LIMIT.get(taskCacheKey(taskId));
+    if (cached) {
+      const parsed = JSON.parse(cached) as {
+        state: "complete" | "error";
+        icons?: Array<{ url: string; index: number }>;
+        remaining?: number;
+        error?: string;
+      };
+      return jsonResponse(parsed);
+    }
+  } catch (e) {
+    console.error("KV task cache read failed:", e);
+  }
+
+  return jsonResponse({ state: "unknown", error: "任务不存在或已过期" }, 404);
+}
+
 // --- Main Worker ---
 
 export default {
@@ -951,6 +1096,17 @@ export default {
 
     if (path === "/api/quota" && request.method === "GET") {
       return handleQuota(request, env);
+    }
+
+    // T-079 B2: GET /api/task/:taskId polling fallback for iOS lock-screen.
+    // Match path-param style; ?test bypass is honored via the same DO path
+    // that handleStream already uses (no separate test branch needed since
+    // ?test only affects rate-limit / quota mocking, not task lookup).
+    {
+      const m = path.match(/^\/api\/task\/([A-Za-z0-9_-]+)$/);
+      if (m && request.method === "GET") {
+        return handleTaskStatus(request, env, m[1]);
+      }
     }
 
     return new Response("Not Found", {
