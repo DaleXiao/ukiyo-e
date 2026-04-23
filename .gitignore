@@ -1,0 +1,10 @@
+
+.adal/
+.agents/
+.dev.vars
+dist/
+# impeccable skills
+*.local
+node_modules/
+node_modules/\ndist/\n.wrangler/
+.wrangler/
