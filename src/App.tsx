@@ -875,16 +875,23 @@ function Lightbox({
   )
 }
 
-// T-079 F6: breathe spinner — inline braille glyph driven by a frame index
-// passed in from App. Tabular-nums + fixed width prevents jitter as glyphs
-// of slightly different visual weight cycle. font-mono so the braille
-// codepoints render with consistent spacing across browsers.
+// T-079 F6 + T-080 fix: breathe spinner — inline braille glyph driven by a
+// frame index passed in from App. T-080: braille codepoints have visually
+// uneven vertical centroids inside their cell (⠀/⠂/⠌ sit low, ⡑ spans
+// full height), so plain `align-middle` (which aligns the *baseline* of the
+// glyph cell) made the spinner appear to hop above/below the adjacent sans
+// text "正在锻造 X%". Fix: wrap the glyph in an inline-flex container with
+// items-center + leading-none + a fixed 1em line-height box so the braille
+// cell is centered inside its own line-box, then the wrapper itself docks
+// to the surrounding text via items-center on the parent <p>'s vertical
+// rhythm. tabular-nums + width:1ch keeps row width stable as glyph weights
+// cycle.
 function BreatheSpinner({ frame }: { frame: number }) {
   return (
     <span
       aria-hidden="true"
-      className="inline-block mr-1.5 align-middle font-mono tabular-nums text-warm-700 dark:text-warm-400"
-      style={{ width: '1ch' }}
+      className="inline-flex items-center justify-center mr-1.5 align-middle font-mono tabular-nums leading-none text-warm-700 dark:text-warm-400"
+      style={{ width: '1ch', height: '1em', lineHeight: '1em' }}
     >
       {BREATHE_FRAMES[frame % BREATHE_FRAMES.length]}
     </span>
