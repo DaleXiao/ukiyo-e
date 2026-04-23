@@ -26,10 +26,31 @@ type GenerationPhase = 'idle' | 'queued' | 'generating' | 'complete' | 'error'
 
 // --- Constants ---
 
-const EXAMPLE_PROMPTS = ['富士山与高铁动车', '雨夜独行的狐姬', '龙与雷暴', '春日航天员']
+// T-079 F3: 4 master chips replace v1.0's example-prompt chips. Display 中文,
+// emit internal id over the wire. Default selection is hokusai (spec).
+type MasterId = 'yoshitoshi' | 'utamaro' | 'hokusai' | 'kuniyoshi'
+
+const MASTERS: { id: MasterId; label: string; tooltip: string }[] = [
+  { id: 'yoshitoshi', label: '月冈芳年', tooltip: '戏剧 / 惊悚 / 超自然' },
+  { id: 'utamaro',    label: '喜多川歌麿', tooltip: '优雅人物 / Bijin-ga' },
+  { id: 'hokusai',    label: '葛饰北斋', tooltip: '山水 / Aizuri 蓝（默认）' },
+  { id: 'kuniyoshi',  label: '歌川国芳', tooltip: '武者 / 动感 / 神话' },
+]
+const DEFAULT_MASTER: MasterId = 'hokusai'
+
+// T-079 F6: breathe spinner — 17 frames @ 100ms, replaces the old
+// inline sun-rotation SVG. Spec dictates the exact frame sequence.
+// Inlined as an array (no npm dep) so worker bundle stays small.
+const BREATHE_FRAMES = ['⠀','⠂','⠌','⡑','⢕','⢝','⣫','⣟','⣿','⣟','⣫','⢝','⢕','⡑','⠌','⠂','⠀']
+const BREATHE_FRAME_MS = 100
+
 const API_BASE = import.meta.env.PROD ? 'https://api-ukiyo.weweekly.online/api' : '/api'
 const _params = new URLSearchParams(window.location.search)
 const TEST_PARAM = _params.has('test') ? '?test' : ''
+
+// T-079 B2: polling cadence used by the visibilitychange fallback when SSE is
+// unavailable (mobile Safari background). 5s matches SPEC.md.
+const TASK_POLL_MS = 5000
 
 // --- Theme helpers ---
 
@@ -95,7 +116,11 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [icons, setIcons] = useState<IconResult[]>([])
   const [remaining, setRemaining] = useState<number | null>(null)
-  const [total] = useState(3)
+  // T-079 B1: quota total was hardcoded to 3, now matches worker DAILY_LIMIT=5.
+  // Server response should override this on first /api/quota fetch (we set
+  // setTotal(data.total) below) but the initial fallback also reads 5/5 now
+  // so first paint isn't "5/3".
+  const [total, setTotal] = useState(5)
   const [error, setError] = useState<string | null>(null)
   const [rateLimited, setRateLimited] = useState(false)
   const [theme, setTheme] = useState<Theme>(getStoredTheme)
@@ -103,12 +128,22 @@ export default function App() {
   const [queuePosition, setQueuePosition] = useState(0)
   const [retryCountdown, setRetryCountdown] = useState(0)
   const [progress, setProgress] = useState(0)
+  // T-079 F3: user-selected master (default hokusai), sent on POST /api/generate.
+  const [master, setMaster] = useState<MasterId>(DEFAULT_MASTER)
+  // T-079 F2: lightbox state — click image to open, click again to close.
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null)
+  // T-079 F6: index into BREATHE_FRAMES driven by setInterval while loading.
+  const [breatheFrame, setBreatheFrame] = useState(0)
   const eventSourceRef = useRef<EventSource | null>(null)
   const retryTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const progressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const progressRef = useRef(0)
   const sseRetriesRef = useRef(0)
   const currentTaskIdRef = useRef<string | null>(null)
+  // T-079 B2: polling fallback timer when SSE is unavailable (page hidden
+  // on mobile Safari). Distinct from retryTimer / progressTimer so cleanup
+  // can null this independently when SSE comes back.
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // Fetch initial quota
   useEffect(() => {
@@ -127,6 +162,11 @@ export default function App() {
       if (res.ok) {
         const data: QuotaResponse = await res.json()
         setRemaining(data.remaining)
+        // T-079 B1: also pull `total` from the server so any future change to
+        // DAILY_LIMIT propagates without a frontend redeploy.
+        if (typeof data.total === 'number' && data.total > 0) {
+          setTotal(data.total)
+        }
         if (data.remaining <= 0) {
           setRateLimited(true)
         }
@@ -150,6 +190,10 @@ export default function App() {
       clearInterval(progressTimerRef.current)
       progressTimerRef.current = null
     }
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current)
+      pollTimerRef.current = null
+    }
   }
 
   function startProgressAnimation(fromPct: number, toPct: number) {
@@ -169,18 +213,105 @@ export default function App() {
   // Cleanup on unmount
   useEffect(() => cleanup, [])
 
+  // T-079 F6: drive breathe spinner frame index while loading. Single
+  // setInterval; pauses (cleared) once loading flips false. The frame
+  // index advances regardless of which sub-phase we're in (queued /
+  // generating) so the user always sees animation, not a frozen icon.
+  useEffect(() => {
+    if (!loading) return
+    const t = setInterval(() => {
+      setBreatheFrame((f) => (f + 1) % BREATHE_FRAMES.length)
+    }, BREATHE_FRAME_MS)
+    return () => clearInterval(t)
+  }, [loading])
+
+  // T-079 B2: polling fallback for iOS lock-screen SSE drop. Runs only
+  // when (a) the page is hidden AND (b) we have an in-flight task. Polls
+  // GET /api/task/:taskId every 5s; on `complete`/`error` it surfaces the
+  // result the same way the SSE complete/error handlers do, so the user
+  // unlocks their phone and sees the result immediately even if the SSE
+  // pipe never woke back up.
+  function startPolling(taskId: string) {
+    if (pollTimerRef.current) return
+    pollTimerRef.current = setInterval(async () => {
+      if (!currentTaskIdRef.current) {
+        if (pollTimerRef.current) clearInterval(pollTimerRef.current)
+        pollTimerRef.current = null
+        return
+      }
+      try {
+        const res = await fetch(`${API_BASE}/task/${encodeURIComponent(taskId)}${TEST_PARAM}`)
+        if (!res.ok && res.status !== 404) return
+        const data = await res.json()
+        if (data.state === 'complete' && Array.isArray(data.icons)) {
+          // Mirror SSE complete handler.
+          if (progressTimerRef.current) clearInterval(progressTimerRef.current)
+          progressRef.current = 100
+          setProgress(100)
+          setIcons(data.icons)
+          if (typeof data.remaining === 'number') {
+            setRemaining(data.remaining)
+            if (data.remaining <= 0) setRateLimited(true)
+          }
+          if (eventSourceRef.current) {
+            eventSourceRef.current.onerror = null
+            eventSourceRef.current.close()
+            eventSourceRef.current = null
+          }
+          currentTaskIdRef.current = null
+          if (pollTimerRef.current) clearInterval(pollTimerRef.current)
+          pollTimerRef.current = null
+          setTimeout(() => {
+            setPhase('complete')
+            setLoading(false)
+          }, 300)
+        } else if (data.state === 'error') {
+          setError(data.error || '生成失败，请重试')
+          setPhase('error')
+          setLoading(false)
+          if (eventSourceRef.current) {
+            eventSourceRef.current.onerror = null
+            eventSourceRef.current.close()
+            eventSourceRef.current = null
+          }
+          currentTaskIdRef.current = null
+          if (pollTimerRef.current) clearInterval(pollTimerRef.current)
+          pollTimerRef.current = null
+        }
+      } catch {
+        // network noise; next tick will retry
+      }
+    }, TASK_POLL_MS)
+  }
+
   // Reconnect SSE when page becomes visible again (mobile Safari lock/unlock)
+  // T-079 B2: also start polling when the page goes hidden mid-task; stop
+  // polling + try SSE resume when it comes back. Polling and SSE never run
+  // together (cleanup() kills both) — the SSE complete/error path is the
+  // happy case, polling is the safety net for backgrounded mobile clients.
   useEffect(() => {
     const handleVisibility = () => {
-      if (document.visibilityState === 'visible' && currentTaskIdRef.current) {
-        // Close stale connection if any, then reconnect
+      const taskId = currentTaskIdRef.current
+      if (!taskId) return
+      if (document.visibilityState === 'visible') {
+        // Stop polling, reconnect SSE.
+        if (pollTimerRef.current) {
+          clearInterval(pollTimerRef.current)
+          pollTimerRef.current = null
+        }
         if (eventSourceRef.current) {
           eventSourceRef.current.onerror = null
           eventSourceRef.current.close()
           eventSourceRef.current = null
         }
         sseRetriesRef.current = 0
-        startSSE(currentTaskIdRef.current)
+        startSSE(taskId)
+      } else {
+        // Page hidden — SSE will likely die on iOS within seconds. Start the
+        // polling fallback now so we have the result waiting when the user
+        // unlocks. SSE may still fire complete first; whichever wins drains
+        // currentTaskIdRef + clears both timers.
+        startPolling(taskId)
       }
     }
     document.addEventListener('visibilitychange', handleVisibility)
@@ -211,22 +342,13 @@ export default function App() {
       const data = JSON.parse(e.data)
       setIcons((prev) => {
         if (prev.some((i) => i.index === data.index)) return prev
-        const updated = [...prev, { url: data.url, index: data.index }].sort((a, b) => a.index - b.index)
-        // When first icon arrives, bump progress to at least 50%
-        if (updated.length === 1 && progressRef.current < 50) {
-          if (progressTimerRef.current) clearInterval(progressTimerRef.current)
-          progressRef.current = 55
-          setProgress(55)
-          // Continue animating toward 95%
-          startProgressAnimation(55, 95)
-        }
-        // When both icons arrive, snap to 100%
-        if (updated.length >= 2) {
-          if (progressTimerRef.current) clearInterval(progressTimerRef.current)
-          progressRef.current = 100
-          setProgress(100)
-        }
-        return updated
+        // T-079 F1: single-image — the first (and only) icon arriving
+        // snaps progress to 100%. v1.0's two-icon staircase (50% then 100%)
+        // is gone with promptB.
+        if (progressTimerRef.current) clearInterval(progressTimerRef.current)
+        progressRef.current = 100
+        setProgress(100)
+        return [{ url: data.url, index: data.index }]
       })
     })
 
@@ -331,7 +453,9 @@ export default function App() {
       const res = await fetch(`${API_BASE}/generate${TEST_PARAM}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ description: trimmed }),
+        // T-079 F3: include user-selected master in the body so worker
+        // skips its old "LLM picks 2 masters" step and uses this one.
+        body: JSON.stringify({ description: trimmed, master }),
       })
 
       if (res.status === 429) {
@@ -378,10 +502,14 @@ export default function App() {
       setPhase('error')
       setLoading(false)
     }
-  }, [description])
+  }, [description, master])
 
-  function handleExampleClick(prompt: string) {
-    setDescription(prompt)
+  // T-079 F3: clicking a master chip just selects it (no auto-generate).
+  // Switching master mid-generation doesn't cancel the in-flight request —
+  // the master is captured at POST time. Visually the chip still reflects
+  // the user's last click for the next generation.
+  function handleMasterChange(id: MasterId) {
+    setMaster(id)
     setError(null)
   }
 
@@ -479,18 +607,29 @@ export default function App() {
           </button>
         </div>
 
-        {/* Example prompts */}
+        {/* T-079 F3: master chips replace example prompts. 中文 label,
+            internal id round-trips through `master` state. Selected chip is
+            visually highlighted; click swaps selection (no auto-generate). */}
         <div className="mt-5 flex flex-wrap gap-2 justify-center stagger">
-          {EXAMPLE_PROMPTS.map((prompt) => (
-            <button
-              key={prompt}
-              onClick={() => handleExampleClick(prompt)}
-              disabled={loading}
-              className="example-pill text-sm text-warm-500 px-3 py-1.5 rounded-full border border-warm-200 dark:border-warm-800/50 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              {prompt}
-            </button>
-          ))}
+          {MASTERS.map((m) => {
+            const selected = m.id === master
+            return (
+              <button
+                key={m.id}
+                onClick={() => handleMasterChange(m.id)}
+                disabled={loading}
+                title={m.tooltip}
+                aria-pressed={selected}
+                className={`example-pill text-sm px-3 py-1.5 rounded-full border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                  selected
+                    ? 'border-accent-500/60 bg-accent-50 dark:bg-accent-900/20 text-accent-700 dark:text-accent-200 font-medium'
+                    : 'border-warm-200 dark:border-warm-800/50 text-warm-500'
+                }`}
+              >
+                {m.label}
+              </button>
+            )
+          })}
         </div>
 
         {/* Error message */}
@@ -504,27 +643,24 @@ export default function App() {
       {/* Generation progress + progressive results */}
       {loading && (
         <div className="mt-12 sm:mt-16 w-full max-w-lg animate-fade-in">
-          {/* Status text */}
+          {/* Status text — T-079 F6: breathe spinner replaces sun emoji */}
           <p className="text-center text-warm-500 dark:text-warm-600 text-sm font-light mb-5 tracking-wide">
             {phase === 'queued' && queuePosition > 1
               ? `排队中，前面 ${queuePosition - 1} 人...`
               : phase === 'queued'
                 ? '准备中...'
                 : phase === 'generating'
-                  ? <><svg className="inline-block w-3.5 h-3.5 mr-1.5 -mt-px animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="4"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="4.22" y1="4.22" x2="6.34" y2="6.34"/><line x1="17.66" y1="17.66" x2="19.78" y2="19.78"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/><line x1="4.22" y1="19.78" x2="6.34" y2="17.66"/><line x1="17.66" y1="6.34" x2="19.78" y2="4.22"/></svg>正在锻造 <span className="text-warm-700 dark:text-warm-400 font-medium tabular-nums">{progress}%</span></>
+                  ? <><BreatheSpinner frame={breatheFrame} />正在锻造 <span className="text-warm-700 dark:text-warm-400 font-medium tabular-nums">{progress}%</span></>
                   : '生成中...'}
           </p>
-          {/* Grid: show arrived icons + shimmer for pending */}
-          <div className="grid grid-cols-2 gap-5 sm:gap-6">
+          {/* T-079 F1: single-card layout. Mobile ~95vw via max-w + page
+              padding; desktop tops out at max-w-md (~448px) so the card stays
+              vertical and readable. Old 2-grid + ShimmerCard pair gone. */}
+          <div className="flex justify-center">
             {icons.length > 0 ? (
-              <IconCard icon={icons[0]} onDownload={handleDownload} />
+              <SingleCard icon={icons[0]} onClick={() => setLightboxUrl(icons[0].url)} onDownload={handleDownload} />
             ) : (
-              <ShimmerCard />
-            )}
-            {icons.length > 1 ? (
-              <IconCard icon={icons[1]} onDownload={handleDownload} />
-            ) : (
-              <ShimmerCard />
+              <SingleShimmer />
             )}
           </div>
           {/* Don't refresh hint */}
@@ -534,19 +670,29 @@ export default function App() {
         </div>
       )}
 
-      {/* Completed results */}
+      {/* Completed results — T-079 F1+F2: single card + lightbox trigger */}
       {!loading && icons.length > 0 && (
         <div className="mt-12 sm:mt-16 w-full max-w-lg animate-slide-up">
-          <div className="grid grid-cols-2 gap-5 sm:gap-6 stagger">
-            {icons.map((icon) => (
-              <IconCard
-                key={icon.index}
-                icon={icon}
-                onDownload={handleDownload}
-              />
-            ))}
+          <div className="flex justify-center stagger">
+            <SingleCard
+              icon={icons[0]}
+              onClick={() => setLightboxUrl(icons[0].url)}
+              onDownload={handleDownload}
+            />
           </div>
         </div>
+      )}
+
+      {/* T-079 F2: lightbox — black backdrop + click-anywhere to close +
+          floating download button bottom-right. Rendered at root level so
+          it overlays everything regardless of scroll position. Esc also
+          closes via the keydown listener. */}
+      {lightboxUrl && (
+        <Lightbox
+          url={lightboxUrl}
+          onClose={() => setLightboxUrl(null)}
+          onDownload={() => handleDownload(lightboxUrl, 0)}
+        />
       )}
 
       {/* Retry countdown */}
@@ -613,46 +759,135 @@ function LoadingSpinner() {
   )
 }
 
-function ShimmerCard() {
+// T-079 F1: SingleShimmer is the new tall-aspect placeholder (1320:2868 ≈
+// 9:19.5 portrait) shown while the worker is generating. The old square
+// `ShimmerCard` was sized for the 2-up icon grid that v1.1 deleted.
+function SingleShimmer() {
   return (
-    <div className="rounded-2.5xl overflow-hidden bg-white dark:bg-warm-900/60 border border-warm-200 dark:border-warm-800/30 shadow-warm-sm dark:shadow-card">
-      <div className="aspect-square shimmer" />
-      <div className="p-4">
-        <div className="h-9 rounded-xl shimmer" />
-      </div>
+    <div className="w-full max-w-[480px] rounded-2.5xl overflow-hidden bg-white dark:bg-warm-900/60 border border-warm-200 dark:border-warm-800/30 shadow-warm-sm dark:shadow-card">
+      <div className="shimmer" style={{ aspectRatio: '1320 / 2868' }} />
     </div>
   )
 }
 
-function IconCard({
+// T-079 F1+F2: SingleCard renders the (one) generated wallpaper at the
+// real 1320:2868 aspect, click-to-lightbox, with a discoverable corner
+// download button (F2 said "右下悬浮下载按钮"). The old IconCard had a
+// full-width "下载 PNG" pill below the image; that pill is gone per spec
+// ("删除独立下载按钮"). Click on the image triggers `onClick` (lightbox);
+// click on the floating button triggers `onDownload` and stops propagation
+// so it doesn't double-fire the lightbox.
+function SingleCard({
   icon,
+  onClick,
   onDownload,
 }: {
   icon: IconResult
+  onClick: () => void
   onDownload: (url: string, index: number) => void
 }) {
   return (
-    <div className="icon-card rounded-2.5xl overflow-hidden bg-white dark:bg-warm-900/60 border border-warm-200 dark:border-warm-800/30 shadow-warm-sm dark:shadow-card animate-slide-up">
-      {/* Icon display area — matches page bg in light, dark in dark mode */}
-      <div className="aspect-square bg-[#FAFAF7] dark:bg-warm-950 p-5">
+    <div className="icon-card relative w-full max-w-[480px] rounded-2.5xl overflow-hidden bg-white dark:bg-warm-900/60 border border-warm-200 dark:border-warm-800/30 shadow-warm-sm dark:shadow-card animate-slide-up">
+      <button
+        onClick={onClick}
+        aria-label="点击查看大图"
+        className="block w-full bg-[#FAFAF7] dark:bg-warm-950 p-0 cursor-zoom-in focus-warm"
+        style={{ aspectRatio: '1320 / 2868' }}
+      >
         <img
           src={icon.url}
-          alt={`Generated icon ${icon.index + 1}`}
-          className="w-full h-full object-contain rounded-2xl"
+          alt={`Generated wallpaper ${icon.index + 1}`}
+          className="w-full h-full object-cover"
           loading="lazy"
         />
-      </div>
-      {/* Download — subtle, discoverable */}
-      <div className="px-4 py-3">
-        <button
-          onClick={() => onDownload(icon.url, icon.index)}
-          className="w-full py-2.5 rounded-xl bg-warm-50 dark:bg-warm-850 hover:bg-warm-100 dark:hover:bg-warm-800 text-warm-600 dark:text-warm-400 hover:text-warm-700 dark:hover:text-warm-300 text-sm font-medium transition-colors flex items-center justify-center gap-2 focus-warm"
-        >
-          <DownloadIcon />
-          <span>下载 PNG</span>
-        </button>
-      </div>
+      </button>
+      {/* Floating download chip — bottom-right, frosted backdrop. Discoverable
+          but doesn't compete with the image for attention. */}
+      <button
+        onClick={(e) => {
+          e.stopPropagation()
+          onDownload(icon.url, icon.index)
+        }}
+        aria-label="下载壁纸"
+        title="下载壁纸"
+        className="absolute bottom-3 right-3 w-11 h-11 rounded-full flex items-center justify-center bg-white/90 dark:bg-warm-900/80 backdrop-blur-md text-warm-700 dark:text-warm-200 hover:bg-white dark:hover:bg-warm-900 shadow-warm-md transition-colors focus-warm"
+      >
+        <DownloadIcon />
+      </button>
     </div>
+  )
+}
+
+// T-079 F2: full-screen lightbox. Black backdrop, single click anywhere
+// closes (per spec "再点关闭"). Esc also closes. The image is sized to
+// `contain` within the viewport so the full 1320×2868 wallpaper is
+// visible without scrolling on phone screens. Includes a download chip
+// at the bottom-right matching the card's affordance.
+function Lightbox({
+  url,
+  onClose,
+  onDownload,
+}: {
+  url: string
+  onClose: () => void
+  onDownload: () => void
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    // Lock body scroll while lightbox is open.
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prev
+    }
+  }, [onClose])
+
+  return (
+    <div
+      onClick={onClose}
+      className="fixed inset-0 z-[100] bg-black/95 flex items-center justify-center cursor-zoom-out animate-fade-in"
+      role="dialog"
+      aria-modal="true"
+      aria-label="壁纸全屏预览"
+    >
+      <img
+        src={url}
+        alt="壁纸全屏预览"
+        className="max-w-full max-h-full object-contain select-none"
+        draggable={false}
+      />
+      <button
+        onClick={(e) => {
+          e.stopPropagation()
+          onDownload()
+        }}
+        aria-label="下载壁纸"
+        title="下载壁纸"
+        className="absolute bottom-6 right-6 w-12 h-12 rounded-full flex items-center justify-center bg-white/90 text-warm-800 hover:bg-white shadow-warm-md transition-colors focus-warm"
+      >
+        <DownloadIcon />
+      </button>
+    </div>
+  )
+}
+
+// T-079 F6: breathe spinner — inline braille glyph driven by a frame index
+// passed in from App. Tabular-nums + fixed width prevents jitter as glyphs
+// of slightly different visual weight cycle. font-mono so the braille
+// codepoints render with consistent spacing across browsers.
+function BreatheSpinner({ frame }: { frame: number }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="inline-block mr-1.5 align-middle font-mono tabular-nums text-warm-700 dark:text-warm-400"
+      style={{ width: '1ch' }}
+    >
+      {BREATHE_FRAMES[frame % BREATHE_FRAMES.length]}
+    </span>
   )
 }
 
