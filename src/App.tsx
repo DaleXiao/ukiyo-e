@@ -807,7 +807,7 @@ function LoadingSpinner() {
 // `ShimmerCard` was sized for the 2-up icon grid that v1.1 deleted.
 function SingleShimmer() {
   return (
-    <div className="w-full max-w-[480px] rounded-2.5xl overflow-hidden bg-white dark:bg-warm-900/60 border border-warm-200 dark:border-warm-800/30 shadow-warm-sm dark:shadow-card">
+    <div className="w-full max-w-[240px] rounded-2.5xl overflow-hidden bg-white dark:bg-warm-900/60 border border-warm-200 dark:border-warm-800/30 shadow-warm-sm dark:shadow-card">
       <div className="shimmer" style={{ aspectRatio: '1320 / 2868' }} />
     </div>
   )
@@ -830,7 +830,7 @@ function SingleCard({
   onDownload: (url: string, index: number) => void
 }) {
   return (
-    <div className="icon-card relative w-full max-w-[480px] rounded-2.5xl overflow-hidden bg-white dark:bg-warm-900/60 border border-warm-200 dark:border-warm-800/30 shadow-warm-sm dark:shadow-card animate-slide-up">
+    <div className="icon-card relative w-full max-w-[240px] rounded-2.5xl overflow-hidden bg-white dark:bg-warm-900/60 border border-warm-200 dark:border-warm-800/30 shadow-warm-sm dark:shadow-card animate-slide-up">
       <button
         onClick={onClick}
         aria-label="点击查看大图"
