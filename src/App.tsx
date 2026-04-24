@@ -44,6 +44,46 @@ const API_BASE = import.meta.env.PROD ? 'https://api-ukiyo.weweekly.online/api' 
 const _params = new URLSearchParams(window.location.search)
 const TEST_PARAM = _params.has('test') ? '?test' : ''
 
+// Cloudflare Turnstile site key (public, safe to ship in bundle).
+const TURNSTILE_SITE_KEY = '0x4AAAAAADCaJQDyyQeiqkiM'
+
+// Run a one-shot invisible Turnstile challenge; returns the token or throws.
+// The token is single-use — request a fresh one for every /api/generate call.
+function getTurnstileToken(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    // @ts-expect-error — turnstile is loaded via index.html <script>
+    const ts = window.turnstile
+    if (!ts) {
+      reject(new Error('turnstile not loaded'))
+      return
+    }
+    const host = document.createElement('div')
+    host.style.display = 'none'
+    document.body.appendChild(host)
+    try {
+      ts.render(host, {
+        sitekey: TURNSTILE_SITE_KEY,
+        size: 'invisible',
+        callback: (token: string) => {
+          document.body.removeChild(host)
+          resolve(token)
+        },
+        'error-callback': () => {
+          document.body.removeChild(host)
+          reject(new Error('turnstile error'))
+        },
+        'timeout-callback': () => {
+          document.body.removeChild(host)
+          reject(new Error('turnstile timeout'))
+        },
+      })
+    } catch (e) {
+      document.body.removeChild(host)
+      reject(e as Error)
+    }
+  })
+}
+
 // T-079 B2: polling cadence used by the visibilitychange fallback when SSE is
 // unavailable (mobile Safari background). 5s matches SPEC.md.
 const TASK_POLL_MS = 5000
@@ -441,12 +481,22 @@ export default function App() {
     cleanup()
 
     try {
+      let turnstileToken = ''
+      try {
+        turnstileToken = await getTurnstileToken()
+      } catch (e) {
+        // Soft-fail: if Turnstile can't be reached (adblocker, offline), we
+        // still attempt the call; worker will reject with 403 if it requires
+        // the token. This keeps the failure message clean.
+        console.warn('turnstile unavailable, calling without token:', e)
+      }
+
       const res = await fetch(`${API_BASE}/generate${TEST_PARAM}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         // T-079 F3: include user-selected master in the body so worker
         // skips its old "LLM picks 2 masters" step and uses this one.
-        body: JSON.stringify({ description: trimmed, master }),
+        body: JSON.stringify({ description: trimmed, master, turnstileToken }),
       })
 
       if (res.status === 429) {
