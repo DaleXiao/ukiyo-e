@@ -150,7 +150,15 @@ const STYLE_MAP: Record<StyleWord, { name: string; preamble: string; palette: st
 
 // Shared negative block appended to every generated prompt. Listed as
 // explicit NOTs because wan2.7 responds to negative prompting inline.
-const UKIYO_NEGATIVE = "NOT photorealistic, NOT 3D rendered, NOT digital painting, NOT anime, NOT cel-shaded, NOT oil painting, NOT watercolor. NO realistic skin shading, NO soft photographic lighting, NO HDR, NO bokeh, NO depth-of-field blur, NO cinematic grading, NO modern or western styling. NO watermark, NO text, NO signature.";
+const UKIYO_NEGATIVE = "NOT photorealistic, NOT 3D rendered, NOT digital painting, NOT anime, NOT cel-shaded, NOT oil painting, NOT watercolor. NO realistic skin shading, NO soft photographic lighting, NO HDR, NO bokeh, NO depth-of-field blur, NO cinematic grading, NO modern or western styling. NO watermark, NO text, NO signature. NO empty or simplified surfaces — every garment must carry a visible woven/embroidered pattern, every armor piece must show individual lames and lacing, every wooden surface must show grain lines, every stone surface must show block joints.";
+
+// v1.3 (T-092-followup): explicit detail mandate. nano-banana-2 reference
+// benchmarks higher on texture/pattern density. Our v1.2 prompt over-
+// emphasized "ABSOLUTELY FLAT" which the model interpreted as "low detail".
+// Fix: flat COLOR (no 3D shading) is preserved, but LINE-level detail is
+// now a hard requirement — museum nishiki-e prints carry enormous keyblock
+// detail inside flat color planes.
+const UKIYO_DETAIL_MANDATE = "[Detail Level — MUSEUM NISHIKI-E] Dense, meticulous keyblock linework inside every flat color plane. Fabrics must display ornate brocade / kimono patterns (fine repeating motifs: seigaiha waves, kikkō hexagons, shippō circles, karakusa vines, stylized cranes, maple leaves, floral diapers, cloud scrolls — pick what fits the subject). Armor (if any) must show individual lames / scales / kozane laced in visible cross-patterns, with metal fittings, braid cords, and tassels drawn one-by-one. Horses (if any) must show individual harness straps, visible rivets / metal ornaments on bridle and saddle, tassels rendered as discrete gold/red bundles. Hair must show individual strands / braided cords. Wood surfaces (gates, beams, torii) must show grain lines and iron reinforcement bands. Stone surfaces (walls, lanterns) must show individual block joints. All of this detail lives IN THE KEYBLOCK LINE DRAWING, never as 3D shading. Line density matches 19th-century Edo polychrome nishiki-e (think Yoshitoshi's 'Hundred Aspects of the Moon' or Kuniyoshi warrior prints) — NOT a modern simplified illustration.";
 
 // v1.1 (T-079 F3): user picks the master via 4-chip UI, so the LLM no longer
 // chooses between masters — it just fills in the 5 narrative slots
@@ -177,9 +185,9 @@ The user provides a SCENE NAME (人物/地点/主题). Your job is to flesh out 
 ━━━ OUTPUT FIELDS (ALL REQUIRED) ━━━
 Fill these five narrative slots in vivid, specific English (the image model speaks English best):
 
-• centralFocus — the precise figure(s)/action(s). Specific pose, gesture, expression. "a lone samurai mid-strike with sword raised, kimono billowing" not "a samurai". Keep it achievable in a FLAT woodblock idiom; avoid describing realistic facial expressions, micro-textures, or photo-style details.
-• environment — the wider setting framing the figure. Specific architectural/natural elements that ground the scene. Lean toward classic ukiyo-e environmental cues (shoji screens, torii gates, pine forests, curved bridges, Mt Fuji silhouette, wave curls, cherry or maple boughs).
-• colorMaterial — a palette description that ADDS to the master's baseline palette. Use ACTUAL Edo-period pigment names (gofun white, bengara crimson, beni red, ai indigo, sumi black, ochre, pale mineral green) — not vague terms like "warm tones" or "earthy colors". Scene-specific additions only; the master's baseline palette is injected separately.
+• centralFocus — the precise figure(s)/action(s). Specific pose, gesture, expression. "a lone samurai mid-strike with sword raised, kimono billowing" not "a samurai". Keep it achievable in a FLAT woodblock idiom; avoid describing realistic facial expressions, micro-textures, or photo-style details. BUT: be specific about the fabric/armor/hair details that should carry brocade pattern or lame-lacing detail (e.g. "dark crimson kimono with gold-thread kikkō hexagon brocade, layered lamellar armor over indigo silk, gold-mon crests on the sleeve").
+• environment — the wider setting framing the figure. Specific architectural/natural elements that ground the scene. Lean toward classic ukiyo-e environmental cues (shoji screens, torii gates, pine forests, curved bridges, Mt Fuji silhouette, wave curls, cherry or maple boughs). Name the MATERIALS explicitly so the image model draws surface texture (weathered cedar-grain gate, dressed-stone wall with visible block joints, clay roof tiles, aged iron reinforcement bands).
+• colorMaterial — a palette description that ADDS to the master's baseline palette. Use ACTUAL Edo-period pigment names (gofun white, bengara crimson, beni red, ai indigo, sumi black, ochre, pale mineral green) — not vague terms like "warm tones" or "earthy colors". Also name 1-2 specific fabric-pattern motifs you want rendered (seigaiha waves, kikkō hexagons, shippō circles, karakusa vines, kiku chrysanthemum diaper). Scene-specific additions only; the master's baseline palette is injected separately.
 • atmosphere — motion/weather/fabric flow described as STYLIZED FLAT WOODBLOCK effects: "stylized white snow flakes as flat shapes", "swirling sumi-wash fog", "arc of repeating wave-curl patterns". NEVER photographic terms ("soft light", "lens flare", "depth of field", "cinematic").
 • moodWord — single English mood word capturing the overall feeling.
 
@@ -295,7 +303,9 @@ function assemblePrompt(v: PromptVariant): string {
 
 [Mood] ${v.moodWord}.
 
-[Format] Vertical 9:19.5 mobile-wallpaper composition. ${UKIYO_NEGATIVE}`;
+${UKIYO_DETAIL_MANDATE}
+
+[Format] Vertical 9:19.5 mobile-wallpaper composition, museum-quality polychrome nishiki-e (multi-block color print) circa late-Edo / early-Meiji. ${UKIYO_NEGATIVE}`;
 }
 
 // v1.1 (T-079 F1+F3): single-prompt synthesis. master is now an explicit
@@ -420,7 +430,11 @@ async function generateIcon(
           size: "1320*2868",
           n: 1,
           seed: Math.floor(Math.random() * 2147483647),
-          prompt_extend: false,
+          // v1.3: enable dashscope prompt augmentation — wan2.7 adds fine
+          // texture/pattern cues when it can reason over the scene. Our
+          // prompt is already master-locked via explicit palette/technique
+          // blocks, so extension adds detail without drifting style.
+          prompt_extend: true,
           watermark: false,
         },
       }),
