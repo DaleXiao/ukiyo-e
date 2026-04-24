@@ -38,11 +38,7 @@ const MASTERS: { id: MasterId; label: string; tooltip: string }[] = [
 ]
 const DEFAULT_MASTER: MasterId = 'hokusai'
 
-// T-079 F6: breathe spinner — 17 frames @ 100ms, replaces the old
-// inline sun-rotation SVG. Spec dictates the exact frame sequence.
-// Inlined as an array (no npm dep) so worker bundle stays small.
-const BREATHE_FRAMES = ['⠀','⠂','⠌','⡑','⢕','⢝','⣫','⣟','⣿','⣟','⣫','⢝','⢕','⡑','⠌','⠂','⠀']
-const BREATHE_FRAME_MS = 100
+// T-086 F2: BREATHE_FRAMES + BREATHE_FRAME_MS removed with BreatheSpinner. Rain spinner needs no frame table (pure CSS).
 
 const API_BASE = import.meta.env.PROD ? 'https://api-ukiyo.weweekly.online/api' : '/api'
 const _params = new URLSearchParams(window.location.search)
@@ -132,8 +128,11 @@ export default function App() {
   const [master, setMaster] = useState<MasterId>(DEFAULT_MASTER)
   // T-079 F2: lightbox state — click image to open, click again to close.
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null)
-  // T-079 F6: index into BREATHE_FRAMES driven by setInterval while loading.
-  const [breatheFrame, setBreatheFrame] = useState(0)
+  // T-086 F2: rain spinner is pure CSS (see .rain-drop keyframes in
+  // index.css), so we no longer need React frame state or a setInterval
+  // driving a frame index. Previous T-079/T-080 braille frame state + its
+  // useEffect setInterval are removed here. BREATHE_FRAMES / BREATHE_FRAME_MS
+  // and BreatheSpinner kept for one release as reference; removed next pass.
   const eventSourceRef = useRef<EventSource | null>(null)
   const retryTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const progressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -213,17 +212,9 @@ export default function App() {
   // Cleanup on unmount
   useEffect(() => cleanup, [])
 
-  // T-079 F6: drive breathe spinner frame index while loading. Single
-  // setInterval; pauses (cleared) once loading flips false. The frame
-  // index advances regardless of which sub-phase we're in (queued /
-  // generating) so the user always sees animation, not a frozen icon.
-  useEffect(() => {
-    if (!loading) return
-    const t = setInterval(() => {
-      setBreatheFrame((f) => (f + 1) % BREATHE_FRAMES.length)
-    }, BREATHE_FRAME_MS)
-    return () => clearInterval(t)
-  }, [loading])
+  // T-086 F2: frame-index interval for braille spinner removed (rain spinner
+  // is CSS-only). Keeping the useEffect slot empty would churn diff; prior
+  // block intentionally deleted.
 
   // T-079 B2: polling fallback for iOS lock-screen SSE drop. Runs only
   // when (a) the page is hidden AND (b) we have an in-flight task. Polls
@@ -609,8 +600,10 @@ export default function App() {
 
         {/* T-079 F3: master chips replace example prompts. 中文 label,
             internal id round-trips through `master` state. Selected chip is
-            visually highlighted; click swaps selection (no auto-generate). */}
-        <div className="mt-5 flex flex-wrap gap-2 justify-center stagger">
+            visually highlighted; click swaps selection (no auto-generate).
+            T-086 F1: prepend "画家风格" label to group chips (使单行语义更明确). */}
+        <div className="mt-5 flex flex-wrap items-center gap-2 justify-center stagger">
+          <span className="text-warm-500 dark:text-warm-600 text-xs mr-2 tracking-wide">画家风格</span>
           {MASTERS.map((m) => {
             const selected = m.id === master
             return (
@@ -650,7 +643,7 @@ export default function App() {
               : phase === 'queued'
                 ? '准备中...'
                 : phase === 'generating'
-                  ? <><BreatheSpinner frame={breatheFrame} />正在锻造 <span className="text-warm-700 dark:text-warm-400 font-medium tabular-nums">{progress}%</span></>
+                  ? <><RainSpinner />正在锻造 <span className="text-warm-700 dark:text-warm-400 font-medium tabular-nums">{progress}%</span></>
                   : '生成中...'}
           </p>
           {/* T-079 F1: single-card layout. Mobile ~95vw via max-w + page
@@ -875,28 +868,46 @@ function Lightbox({
   )
 }
 
-// T-079 F6 + T-080 fix: breathe spinner — inline braille glyph driven by a
-// frame index passed in from App. T-080: braille codepoints have visually
-// uneven vertical centroids inside their cell (⠀/⠂/⠌ sit low, ⡑ spans
-// full height), so plain `align-middle` (which aligns the *baseline* of the
-// glyph cell) made the spinner appear to hop above/below the adjacent sans
-// text "正在锻造 X%". Fix: wrap the glyph in an inline-flex container with
-// items-center + leading-none + a fixed 1em line-height box so the braille
-// cell is centered inside its own line-box, then the wrapper itself docks
-// to the surrounding text via items-center on the parent <p>'s vertical
-// rhythm. tabular-nums + width:1ch keeps row width stable as glyph weights
-// cycle.
-function BreatheSpinner({ frame }: { frame: number }) {
+// T-086 F2: rain spinner — replaces T-079/T-080 braille-based BreatheSpinner.
+//
+// History: braille glyphs (⠀/⠂/⠌…) have uneven visual centroids inside
+// their cell, so even with inline-flex + items-center + leading-none the
+// spinner still shimmied against the surrounding sans text "正在锻造 X%"
+// (T-080 was the 2nd fix, still imperfect per Dale). Root cause is font
+// metrics, not layout.
+//
+// Rain spinner sidesteps that: it's an inline SVG with its own viewBox, so
+// vertical centering comes from the viewBox math (viewBox 0 0 4 10, drop
+// lines span the full y=0–10 range), and `vertical-align: middle` docks the
+// box to the text x-height. Height = 1em (scales with font-size), width =
+// 1ch (stable row width, tabular-nums no longer needed). No frame-index
+// JS—pure CSS keyframes on stroke-dashoffset per drop, each with its own
+// delay so the 3 drops cascade.
+function RainSpinner() {
   return (
-    <span
+    <svg
       aria-hidden="true"
-      className="inline-flex items-center justify-center mr-1.5 align-middle font-mono tabular-nums leading-none text-warm-700 dark:text-warm-400"
-      style={{ width: '1ch', height: '1em', lineHeight: '1em' }}
+      viewBox="0 0 4 10"
+      className="inline-block mr-1.5 align-middle text-warm-700 dark:text-warm-400 rain-spinner"
+      style={{ width: '1ch', height: '1em' }}
+      preserveAspectRatio="none"
     >
-      {BREATHE_FRAMES[frame % BREATHE_FRAMES.length]}
-    </span>
+      {/* 3 vertical drops, staggered. stroke-dasharray 3 7 => 3px visible,
+          7px gap; dashoffset cycles 0→10 to scroll the visible segment
+          downward through the viewBox height (10). */}
+      <line x1="1" x2="1" y1="0" y2="10" stroke="currentColor" strokeWidth="0.6" strokeLinecap="round" strokeDasharray="3 7" className="rain-drop rain-drop-1" />
+      <line x1="2" x2="2" y1="0" y2="10" stroke="currentColor" strokeWidth="0.6" strokeLinecap="round" strokeDasharray="3 7" className="rain-drop rain-drop-2" />
+      <line x1="3" x2="3" y1="0" y2="10" stroke="currentColor" strokeWidth="0.6" strokeLinecap="round" strokeDasharray="3 7" className="rain-drop rain-drop-3" />
+    </svg>
   )
 }
+
+// T-086 F2: BreatheSpinner (T-079 F6 + T-080 fix) removed — replaced by
+// RainSpinner above. Comment retained as a breadcrumb: braille codepoints
+// have uneven vertical centroids, which defeated two rounds of layout fixes
+// (inline-flex items-center leading-none 1em line-box). Rain spinner
+// sidesteps the font-metrics issue entirely by drawing into its own SVG
+// viewBox and docking via vertical-align: middle.
 
 function DownloadIcon() {
   return (
