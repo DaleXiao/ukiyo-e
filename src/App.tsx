@@ -57,29 +57,37 @@ function getTurnstileToken(): Promise<string> {
       reject(new Error('turnstile not loaded'))
       return
     }
+    // Turnstile invisible mode requires an actually-rendered container
+    // (display:none breaks the challenge). Use off-screen positioning with
+    // zero size + aria-hidden so it's invisible to users but live in layout.
     const host = document.createElement('div')
-    host.style.display = 'none'
+    host.setAttribute('aria-hidden', 'true')
+    host.style.cssText =
+      'position:fixed;bottom:0;right:0;width:0;height:0;overflow:hidden;pointer-events:none;opacity:0;'
     document.body.appendChild(host)
+
+    let settled = false
+    const done = (fn: () => void) => {
+      if (settled) return
+      settled = true
+      try { document.body.removeChild(host) } catch {}
+      fn()
+    }
+    // Hard safety timeout so the UI never hangs on 准备中 if Turnstile
+    // hangs silently (adblocker / network / script not yet loaded).
+    const timer = setTimeout(() => done(() => reject(new Error('turnstile timeout (10s)'))), 10_000)
+
     try {
       ts.render(host, {
         sitekey: TURNSTILE_SITE_KEY,
         size: 'invisible',
-        callback: (token: string) => {
-          document.body.removeChild(host)
-          resolve(token)
-        },
-        'error-callback': () => {
-          document.body.removeChild(host)
-          reject(new Error('turnstile error'))
-        },
-        'timeout-callback': () => {
-          document.body.removeChild(host)
-          reject(new Error('turnstile timeout'))
-        },
+        callback: (token: string) => { clearTimeout(timer); done(() => resolve(token)) },
+        'error-callback': () => { clearTimeout(timer); done(() => reject(new Error('turnstile error'))) },
+        'timeout-callback': () => { clearTimeout(timer); done(() => reject(new Error('turnstile timeout'))) },
       })
     } catch (e) {
-      document.body.removeChild(host)
-      reject(e as Error)
+      clearTimeout(timer)
+      done(() => reject(e as Error))
     }
   })
 }
