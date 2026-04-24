@@ -103,32 +103,54 @@ function taskCacheKey(taskId: string): string {
   return `task:${taskId}`;
 }
 
-const STYLE_MAP: Record<StyleWord, { name: string; preamble: string; styleNotes: string; outputQuality: string }> = {
+// v1.2 (T-092, 2026-04-24): overhauled prompt idiom to match nano-banana-2
+// quality on wan2.7-image-pro.
+//
+// Key learnings (benchmarked 4 masters against Dale's reference):
+//   - Remove 'photographic' trigger words ("8K", "high sharpness",
+//     "high-fidelity", "professional", "meticulous"). On diffusion
+//     models they drag output toward photoreal / CGI and destroy the
+//     flat color + keyblock woodblock idiom.
+//   - Inject ACTUAL woodblock pigment names (gofun, bengara, beni, ai,
+//     sumi, ochre) rather than "dominant blue tones".
+//   - Encode TECHNIQUE explicitly: "flat mineral pigment planes",
+//     "black keyblock outlines", "no facial shading", "bokashi ONLY
+//     in sky/water". Diffusion won't infer these from vibe words.
+//   - Encode COMPOSITION RULE: "figure occupies 60-70% of vertical
+//     frame" + "foreground branch arching into frame" — this is what
+//     makes the nano-banana-2 reference image feel curated.
+//   - Negative block with hard NOTs (photoreal / 3D / anime / oil /
+//     HDR / bokeh / modern) to counter wan2.7's default bias.
+const STYLE_MAP: Record<StyleWord, { name: string; preamble: string; palette: string; technique: string }> = {
   yoshitoshi: {
     name: 'Yoshitoshi Tsukioka (月冈芳年)',
-    preamble: "A vertical Japanese Ukiyo-e woodblock print, rendered in the distinct, dynamic, intense, and often macabre style of the renowned master Yoshitoshi Tsukioka.",
-    styleNotes: "Yoshitoshi Tsukioka's interpretation of the 'Ukiyo-e' tradition, particularly his focus on dynamic movement, psychological intensity, and sometimes 'Muzan-e' (cruel/bloody prints) or ghost/supernatural aesthetics. The composition is dynamic, often utilizing dramatic angles and diagonal compositions to enhance tension. High-fidelity, vintage Japanese Washi paper texture with visible woodblock grain pressure. Use expressive Sumi-ink lines that vary in thickness to define energy. Avoid static flatness; prioritize expressive line energy and dramatic contrasts. The visual language should feature intense drama, bizarre beauty, or historical gravity. Professional, meticulous, and artistic. The overall tone should be Dramatic and focused on 'Narrative' or 'Psychological' visual storytelling.",
-    outputQuality: "Vertical (9:19.5 aspect ratio) optimized for mobile displays. 8K resolution, high sharpness, specific washi paper and woodblock texture, and no watermarks.",
+    preamble: "A vertical Japanese Ukiyo-e woodblock print in the style of Yoshitoshi Tsukioka.",
+    palette: "Deep bengara crimson, dark ai indigo, murky sumi wash gray, pale gofun white, scattered beni red accents. Aged washi paper substrate with visible fiber texture and woodblock grain.",
+    technique: "Diagonal dynamic composition with dramatic negative space. Expressive black keyblock outlines varying thick-to-thin for energy. Flat color planes with NO realistic shading on figures. Muzan-e / ghost-print idiom: psychological intensity, macabre or supernatural undertones.",
   },
   utamaro: {
     name: 'Kitagawa Utamaro (喜多川歌麿)',
-    preamble: "A vertical Japanese Ukiyo-e woodblock print, rendered in the distinct, sensual, and refined style of the renowned master Kitagawa Utamaro.",
-    styleNotes: "Kitagawa Utamaro's interpretation of the 'Ukiyo-e' tradition, particularly his 'Bijin-ga' (beautiful person) aesthetics and 'Ōkubi-e' (close-up portrait) sensibility, even in wider shots. The composition is intimate, often asymmetrical, and focuses intensely on the figures' psychology. High-fidelity, vintage Japanese Washi paper texture with visible woodblock grain pressure. Use extremely fine, fluid Sumi-ink lines to define form. Avoid heavy shading or realistic depth; prioritize clean, flat color application and exquisite line work. The visual language should feature refined sensuality and delicate beauty. Professional, meticulous, and artistic. The overall tone should be Intimate and focused on 'Human' visual storytelling.",
-    outputQuality: "Vertical (9:19.5 aspect ratio) optimized for mobile displays. 8K resolution, high sharpness, specific washi paper and woodblock texture, and no watermarks.",
+    preamble: "A vertical Japanese Ukiyo-e woodblock print in the style of Kitagawa Utamaro.",
+    palette: "Warm cream washi paper, soft beni rouge, pale ochre, subtle mineral green, gofun white for the face and skin, thin sumi ink for eyebrows and eye slits. Delicate aged washi fiber texture.",
+    technique: "Asymmetric intimate close-up framing (Bijin-ga / Ōkubi-e sensibility). Ultra-fine uniform keyblock outlines. ABSOLUTELY FLAT color with NO facial shading, NO modeling on cheeks or neck. Emphasis on exquisite line work and refined sensuality.",
   },
   hokusai: {
     name: 'Katsushika Hokusai (葛饰北斋)',
-    preamble: "A vertical polychrome Japanese woodblock print (Ukiyo-e), rendered in the distinct, geometric, and sublime style of Katsushika Hokusai.",
-    styleNotes: "the 'Ukiyo-e' art style, specifically focusing on 'Meisho-e' (famous places) aesthetics, paying homage to Katsushika Hokusai. The composition is elegant, mathematically balanced, and uses 'geometric' perspective. High-fidelity, vintage Woodblock Print texture on Washi paper. Use fine, rhythmic lines to define shapes. Avoid chaotic action; create depth through scale contrast and color gradients (Bokashi). The visual language should feature fractal patterns in nature and serene grandeur. Professional, meticulous, and artistic. The overall tone should be Sublime and focused on 'Poetic' visual storytelling.",
-    outputQuality: "Vertical (9:19.5 aspect ratio) optimized for mobile displays. 8K resolution, high sharpness, specific wood grain texture, and no watermarks.",
+    preamble: "A vertical polychrome Japanese Ukiyo-e woodblock print in the style of Katsushika Hokusai.",
+    palette: "Aizuri-e indigo-dominant: deep ai blue, pale gofun white, muted ochre, faint pine green, subtle warm-paper undertone. Aged washi substrate with visible fibers.",
+    technique: "Mathematically balanced composition with geometric perspective. Fine rhythmic black keyblock lines. Flat mineral pigment planes. Bokashi gradient ONLY in sky and distant water (never on figures or foreground objects). Fractal repeating patterns for waves, clouds, branches.",
   },
   kuniyoshi: {
     name: 'Utagawa Kuniyoshi (歌川国芳)',
-    preamble: "A vertical polychrome Japanese woodblock print (Ukiyo-e), rendered in the distinct, dynamic, and mythical style of Utagawa Kuniyoshi.",
-    styleNotes: "the 'Ukiyo-e' (floating world) art style, specifically 'Musha-e' (warrior prints), paying homage to Utagawa Kuniyoshi. The composition is bold, dynamic, and uses 'heroic' perspective. High-fidelity, vintage Woodblock Print texture on Washi paper. Use bold Sumi-ink outlines to define shapes. Avoid realistic 3D shading; create depth through layering and color gradients (Bokashi). The visual language should feature exaggerated poses and elaborate patterns. Professional, meticulous, and traditional. The overall tone should be Mythical and focused on 'Legendary' visual storytelling.",
-    outputQuality: "Vertical (9:19.5 aspect ratio) optimized for mobile displays. 8K resolution, high sharpness, specific wood grain texture, and no watermarks.",
+    preamble: "A vertical polychrome Japanese Ukiyo-e woodblock print in the style of Utagawa Kuniyoshi.",
+    palette: "Saturated vermilion, jet sumi black, strong yellow ochre, deep pine green, gofun white, ai blue details. Heavy aged washi substrate with visible woodblock grain.",
+    technique: "Bold heroic black keyblock outlines. Elaborate flat-pattern fabric motifs on armor/kimono (no 3D drapery). Layered depth via overlap, NOT linear perspective. Musha-e warrior-print idiom: dynamic pose, high-contrast saturation.",
   },
 };
+
+// Shared negative block appended to every generated prompt. Listed as
+// explicit NOTs because wan2.7 responds to negative prompting inline.
+const UKIYO_NEGATIVE = "NOT photorealistic, NOT 3D rendered, NOT digital painting, NOT anime, NOT cel-shaded, NOT oil painting, NOT watercolor. NO realistic skin shading, NO soft photographic lighting, NO HDR, NO bokeh, NO depth-of-field blur, NO cinematic grading, NO modern or western styling. NO watermark, NO text, NO signature.";
 
 // v1.1 (T-079 F3): user picks the master via 4-chip UI, so the LLM no longer
 // chooses between masters — it just fills in the 5 narrative slots
@@ -155,10 +177,10 @@ The user provides a SCENE NAME (人物/地点/主题). Your job is to flesh out 
 ━━━ OUTPUT FIELDS (ALL REQUIRED) ━━━
 Fill these five narrative slots in vivid, specific English (the image model speaks English best):
 
-• centralFocus — the precise figure(s)/action(s). Specific pose, gesture, expression. "a lone samurai mid-strike with sword raised, kimono billowing" not "a samurai".
-• environment — the wider setting framing the figure. Specific architectural/natural elements that ground the scene.
-• colorMaterial — dominant palette + textural hints, in {{MASTER}}-APPROPRIATE language. Examples: hokusai = "dominant Prussian Blue (Aizuri-e) tones mixed with pale yellows and vintage paper warmth"; yoshitoshi = "deep crimsons and dark indigoes against murky grays"; utamaro = "soft mineral pigments, ochre and rouge, on warm cream paper"; kuniyoshi = "saturated reds and bold blacks, dynamic high-contrast composition".
-• atmosphere — dynamic/mood elements: line quality, motion, weather, particles, fabric flow.
+• centralFocus — the precise figure(s)/action(s). Specific pose, gesture, expression. "a lone samurai mid-strike with sword raised, kimono billowing" not "a samurai". Keep it achievable in a FLAT woodblock idiom; avoid describing realistic facial expressions, micro-textures, or photo-style details.
+• environment — the wider setting framing the figure. Specific architectural/natural elements that ground the scene. Lean toward classic ukiyo-e environmental cues (shoji screens, torii gates, pine forests, curved bridges, Mt Fuji silhouette, wave curls, cherry or maple boughs).
+• colorMaterial — a palette description that ADDS to the master's baseline palette. Use ACTUAL Edo-period pigment names (gofun white, bengara crimson, beni red, ai indigo, sumi black, ochre, pale mineral green) — not vague terms like "warm tones" or "earthy colors". Scene-specific additions only; the master's baseline palette is injected separately.
+• atmosphere — motion/weather/fabric flow described as STYLIZED FLAT WOODBLOCK effects: "stylized white snow flakes as flat shapes", "swirling sumi-wash fog", "arc of repeating wave-curl patterns". NEVER photographic terms ("soft light", "lens flare", "depth of field", "cinematic").
 • moodWord — single English mood word capturing the overall feeling.
 
 ━━━ SELF-CHECK BEFORE OUTPUT ━━━
@@ -254,18 +276,26 @@ async function getRemainingQuota(
 
 function assemblePrompt(v: PromptVariant): string {
   const m = STYLE_MAP[v.master] || STYLE_MAP.hokusai;
+  // v1.2 (T-092): restructured to [Format][Subject][Environment]
+  // [Palette][Technique][Atmosphere][Mood][Negative]. Subject carries
+  // explicit 60-70% frame occupancy hint, environment asks for a
+  // foreground framing element (branch/cloud/bough) — both were key
+  // to matching the nano-banana-2 reference composition.
   return `${m.preamble}
 
-**[The Scene]**
-The visual content fills the frame. The central focus is on precisely and delicately figures depicting: ${v.centralFocus}.
+[Subject] ${v.centralFocus}. The figure(s) occupy 60-70% of the vertical frame.
 
-The scene is set within a large, detailed environment representing ${v.environment}.
+[Environment] ${v.environment}. Include a foreground framing element (a branch, bough, fabric drape, or drifting cloud) arching in from one top corner to frame the composition.
 
-**[Details & Atmosphere]**
-The scene specialize in ${m.styleNotes.replace(/^[a-zA-Z]/, c => c)} ${v.colorMaterial} emphasizes the figures. Atmospheric elements like ${v.atmosphere} are integrated throughout.
+[Palette] ${m.palette} ${v.colorMaterial}
 
-**[Output quality]**
-${m.outputQuality}`;
+[Technique] ${m.technique}
+
+[Atmosphere] ${v.atmosphere} — render any particles (leaves, snow, petals, rain, smoke) as stylized FLAT woodblock shapes, never as realistic photographic effects.
+
+[Mood] ${v.moodWord}.
+
+[Format] Vertical 9:19.5 mobile-wallpaper composition. ${UKIYO_NEGATIVE}`;
 }
 
 // v1.1 (T-079 F1+F3): single-prompt synthesis. master is now an explicit
