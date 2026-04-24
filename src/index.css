@@ -242,8 +242,30 @@ body {
   .animate-fade-in,
   .animate-slide-up,
   .icon-card,
-  .example-pill {
+  .example-pill,
+  .rain-drop {
     animation: none !important;
     transition: none !important;
   }
 }
+
+/* ───────────────────────────────────────────────
+   T-086 F2: rain spinner animation
+   Replaces the T-079/T-080 braille breathe spinner. Three vertical drops
+   scroll their dasharray down the viewBox with staggered phase. Pure CSS,
+   no React frame state needed.
+   ─────────────────────────────────────────────── */
+@keyframes rain-drop {
+  0%   { stroke-dashoffset: 0; opacity: 0; }
+  15%  { opacity: 0.9; }
+  85%  { opacity: 0.9; }
+  100% { stroke-dashoffset: -10; opacity: 0; }
+}
+
+.rain-drop {
+  animation: rain-drop 900ms linear infinite;
+}
+
+.rain-drop-1 { animation-delay: 0ms; }
+.rain-drop-2 { animation-delay: 300ms; }
+.rain-drop-3 { animation-delay: 600ms; }
