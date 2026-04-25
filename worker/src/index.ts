@@ -81,7 +81,7 @@ interface SSEWriter {
 
 const DAILY_LIMIT = 5;
 const KIMI_MODEL = "qwen3.6-max-preview";
-const DASHSCOPE_MODEL = "wan2.7-image-pro";
+const DASHSCOPE_MODEL = "qwen-image-2.0-pro";
 const DASHSCOPE_SUBMIT_URL =
   "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
 const KIMI_API_URL =
