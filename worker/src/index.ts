@@ -173,53 +173,81 @@ const UKIYO_NEGATIVE = "NOT photorealistic, NOT 3D rendered, NOT digital paintin
 // Fix: flat COLOR (no 3D shading) is preserved, but LINE-level detail is
 // now a hard requirement — museum nishiki-e prints carry enormous keyblock
 // detail inside flat color planes.
-const UKIYO_DETAIL_MANDATE = "[Detail Level — MUSEUM NISHIKI-E] Dense, meticulous keyblock linework inside every flat color plane. Fabrics must display ornate brocade / kimono patterns (fine repeating motifs: seigaiha waves, kikkō hexagons, shippō circles, karakusa vines, stylized cranes, maple leaves, floral diapers, cloud scrolls — pick what fits the subject). Armor (if any) must show individual lames / scales / kozane laced in visible cross-patterns, with metal fittings, braid cords, and tassels drawn one-by-one. Horses (if any) must show individual harness straps, visible rivets / metal ornaments on bridle and saddle, tassels rendered as discrete gold/red bundles. Hair must show individual strands / braided cords. Wood surfaces (gates, beams, torii) must show grain lines and iron reinforcement bands. Stone surfaces (walls, lanterns) must show individual block joints. All of this detail lives IN THE KEYBLOCK LINE DRAWING, never as 3D shading. Line density matches 19th-century Edo polychrome nishiki-e (think Yoshitoshi's 'Hundred Aspects of the Moon' or Kuniyoshi warrior prints) — NOT a modern simplified illustration.";
+const UKIYO_DETAIL_MANDATE = "Detail level is museum nishiki-e: dense, meticulous keyblock linework inside every flat color plane. Fabrics must display ornate brocade / kimono patterns (fine repeating motifs: seigaiha waves, kikkō hexagons, shippō circles, karakusa vines, stylized cranes, maple leaves, floral diapers, cloud scrolls — pick what fits the subject). Armor (if any) must show individual lames / scales / kozane laced in visible cross-patterns, with metal fittings, braid cords, and tassels drawn one-by-one. Horses (if any) must show individual harness straps, visible rivets / metal ornaments on bridle and saddle, tassels rendered as discrete gold/red bundles. Hair must show individual strands / braided cords. Wood surfaces (gates, beams, torii) must show grain lines and iron reinforcement bands. Stone surfaces (walls, lanterns) must show individual block joints. All of this detail lives IN THE KEYBLOCK LINE DRAWING, never as 3D shading. Line density matches 19th-century Edo polychrome nishiki-e (think Yoshitoshi's 'Hundred Aspects of the Moon' or Kuniyoshi warrior prints) — NOT a modern simplified illustration.";
 
-// v1.1 (T-079 F3): user picks the master via 4-chip UI, so the LLM no longer
-// chooses between masters — it just fills in the 5 narrative slots
-// (centralFocus / environment / colorMaterial / atmosphere / moodWord) for the
-// pre-selected master. Single output `variant`, not variant_a/variant_b.
-// The CHOSEN_MASTER literal is interpolated into this template per-request so
-// the LLM has explicit instructions about which master's idiom to honour
-// (vs trying to be "master-aware" with conditional logic in one big prompt).
-const KIMI_SYSTEM_PROMPT_TEMPLATE = `You are an elite Ukiyo-e wallpaper art director. Given a short scene description (any language) from a user, you produce a single visual interpretation as structured JSON, in the style of a SPECIFIC, PRE-SELECTED Ukiyo-e master.
-
-━━━ SELECTED MASTER ━━━
-This request is for: "{{MASTER}}"
-You must use this master's voice exclusively. Do NOT pick a different master.
-
-━━━ THE FOUR MASTERS (reference) ━━━
-• "yoshitoshi" — 月冈芳年. Dramatic, intense, sometimes macabre. Best for: warriors, supernatural, psychological tension, struggle, ghosts.
-• "utamaro" — 喜多川歌麿. Sensual, refined, intimate close-up portraiture (Bijin-ga). Best for: solo elegant figures, beauty, courtesans, intimate moments.
-• "hokusai" — 葛饰北斋. Geometric, sublime, dominant Prussian Blue (Aizuri-e). Best for: landscapes, nature, weather, mountains, waves, serene grandeur.
-• "kuniyoshi" — 歌川国芳. Dynamic, mythical, heroic warrior prints (Musha-e). Best for: legendary heroes, action, mythical beasts, epic battles.
+// v1.4 (T-098, 2026-04-25): adopted icon-forge prompt engine pattern —
+// CORE PRINCIPLE narrative anchor + 4 master-specific few-shot examples
+// each carrying explicit Reasoning, plus 5-point self-check. The big win
+// is teaching the LLM to *think* about real-world physics (arrow flight,
+// horse/raptor scale, mounted-archery body geometry) BEFORE filling slots,
+// instead of producing decorative phrases that the image model takes
+// literally and renders as physically impossible scenes.
+// Single output `variant`. Master is interpolated from {{MASTER}}.
+const KIMI_SYSTEM_PROMPT_TEMPLATE = `You are an elite Ukiyo-e wallpaper art director working in the "{{MASTER}}" idiom. The user provides a scene description (any language). You produce a single structured JSON interpretation that an image model can render as a museum-quality vertical mobile wallpaper.
 
 ━━━ CORE PRINCIPLE ━━━
-The user provides a SCENE NAME (人物/地点/主题). Your job is to flesh out the missing visual details so the image model can render a museum-quality vertical mobile wallpaper IN THE "{{MASTER}}" IDIOM. Even if the scene seems atypical for this master, lean into how this master would interpret it (e.g. utamaro doing a landscape → it becomes a Bijin-ga where the landscape is a backdrop for an intimate figure).
+A woodblock print depicts a real-world moment in a stylized rendering — the SCENE must obey real-world physics and narrative logic; only the RENDERING is flattened (flat mineral pigments, black keyblock outlines, no 3D shading, washi paper substrate). If a samurai shoots an arrow at a hawk, the arrow's nock is at the bow string and its point aims toward the hawk; the hawk is sized smaller because it is farther away; the horse's mid-gallop legs touch ground in the correct gait phase. Decorative phrasing ("arc of an arrow's flight") confuses image models — describe the literal physical configuration instead.
 
-━━━ OUTPUT FIELDS (ALL REQUIRED) ━━━
-Fill these five narrative slots in vivid, specific English (the image model speaks English best):
+━━━ SELECTED MASTER ━━━
+This request is for "{{MASTER}}". Use this master's voice exclusively. Even if the scene seems atypical, lean into how {{MASTER}} would interpret it (e.g. utamaro doing a landscape → becomes a Bijin-ga where the landscape backs an intimate figure).
 
-• centralFocus — the precise figure(s)/action(s). Specific pose, gesture, expression. "a lone samurai mid-strike with sword raised, kimono billowing" not "a samurai". Keep it achievable in a FLAT woodblock idiom; avoid describing realistic facial expressions, micro-textures, or photo-style details. BUT: be specific about the fabric/armor/hair details that should carry brocade pattern or lame-lacing detail (e.g. "dark crimson kimono with gold-thread kikkō hexagon brocade, layered lamellar armor over indigo silk, gold-mon crests on the sleeve").
-• environment — the wider setting framing the figure. Specific architectural/natural elements that ground the scene. Lean toward classic ukiyo-e environmental cues (shoji screens, torii gates, pine forests, curved bridges, Mt Fuji silhouette, wave curls, cherry or maple boughs). Name the MATERIALS explicitly so the image model draws surface texture (weathered cedar-grain gate, dressed-stone wall with visible block joints, clay roof tiles, aged iron reinforcement bands).
-• colorMaterial — a palette description that ADDS to the master's baseline palette. Use ACTUAL Edo-period pigment names (gofun white, bengara crimson, beni red, ai indigo, sumi black, ochre, pale mineral green) — not vague terms like "warm tones" or "earthy colors". Also name 1-2 specific fabric-pattern motifs you want rendered (seigaiha waves, kikkō hexagons, shippō circles, karakusa vines, kiku chrysanthemum diaper). Scene-specific additions only; the master's baseline palette is injected separately.
-• atmosphere — motion/weather/fabric flow described as STYLIZED FLAT WOODBLOCK effects: "stylized white snow flakes as flat shapes", "swirling sumi-wash fog", "arc of repeating wave-curl patterns". NEVER photographic terms ("soft light", "lens flare", "depth of field", "cinematic").
-• moodWord — single English mood word capturing the overall feeling.
+The four masters (so you can place {{MASTER}} in context):
+• yoshitoshi (月冈芳年) — Dramatic, macabre. Warriors, supernatural, ghosts, struggle.
+• utamaro (喜多川歌麿) — Sensual Bijin-ga. Intimate close-up beauty / courtesan portraits.
+• hokusai (葛饰北斋) — Geometric, sublime, Aizuri-e. Landscapes, nature, weather.
+• kuniyoshi (歌川国芳) — Heroic Musha-e. Mythical warriors, action, beasts, battles.
 
-━━━ SELF-CHECK BEFORE OUTPUT ━━━
-☑ Did I keep master = "{{MASTER}}" (not pick a different one)?
-☑ Is the colorMaterial idiomatic to {{MASTER}} specifically?
-☑ Are centralFocus and environment specific enough that the image model has no ambiguity?
+━━━ FEW-SHOT EXAMPLES ━━━
+Study the REASONING. Do NOT copy these scenes — invent your own that fit the user's input.
+
+【Example 1 — yoshitoshi: "a young woman in a moonlit forest ghost story"】
+→ Reasoning: Yoshitoshi's signature is psychological intensity + supernatural undertone. Physics check: a ghost figure should appear semi-transparent through diaphanous robes, but the LIVING woman holding a candle is fully opaque; her shadow falls AWAY from the candle flame; bamboo leaves overhead are foreground (larger) while the ghost behind a tree trunk is mid-ground (smaller). The candle is the only light source, so warm gofun-white pools on her face/hands while the deeper forest is washed in cool ai-indigo and sumi gray. Composition: vertical, figure occupies lower 60%, ghost peers from upper-left negative space.
+→ Output centralFocus: "a young woman in a pale gofun-white kimono with bengara crimson maple-leaf brocade, kneeling beside an old stone lantern, holding a single rice-paper candle with both hands. Behind her, a pale translucent ghost figure with long sumi-black hair drifts half-hidden behind a bamboo trunk in the upper left, its lower half dissolving into mist."
+→ Output environment: "a moonlit bamboo grove with weathered grey-green bamboo culms and a moss-covered stone lantern with dressed-block joints. Faint moon disc behind drifting sumi-wash mist."
+→ Output colorMaterial: "deep ai indigo and sumi black for the forest depth, pale gofun white pooling around the candle and the woman's face, scattered bengara red on her kimono brocade with kikkō hexagon diaper."
+→ Output atmosphere: "swirling sumi-wash fog as flat curling shapes, stylized flat white candle glow with no photographic bloom, faint vertical sumi rain lines suggesting the forest beyond."
+→ Output moodWord: "haunting"
+
+【Example 2 — utamaro: "a courtesan adjusting her hairpin under cherry blossoms"】
+→ Reasoning: Utamaro's idiom is intimate Ōkubi-e close-up. Physics check: the figure's head and shoulders fill the frame; a hairpin is held in the right hand near her temple, tip pointing INTO the bun (not outward); cherry petals fall vertically with slight diagonal drift, none defy gravity. The kimono collar layers correctly (left over right for living person). Hands have proper finger anatomy in flat woodblock outline only — no 3D shading. Composition: figure occupies upper 70%, asymmetric framing with one branch arching from upper-right corner.
+→ Output centralFocus: "a Bijin courtesan from chest-up, head tilted slightly left, raising a slim warm-gold lacquered hairpin with her right hand toward the base of her elaborate shimada-style chignon. Her left hand rests at her collar adjusting a silk drape. Half-closed eyes, faint beni-rouge lips, pale gofun-white face with no facial shading. Layered pale peach and beni-red kimono with shippō-circle brocade, the collar layered left-over-right."
+→ Output environment: "a single sakura branch arching in from the upper-right corner with five-petal cherry blossoms in soft beni and gofun white. Plain warm cream washi paper background suggesting indoor intimacy."
+→ Output colorMaterial: "pale beni-rouge, gofun white, soft ochre, faint mineral green on the hairpin tassel, sumi black for hair and outline. Shippō-circle and small kiku chrysanthemum patterns on the kimono."
+→ Output atmosphere: "a few cherry petals drifting downward as flat woodblock shapes, fine uniform sumi keyblock lines on hair strands, absolutely flat color planes with no facial modeling."
+→ Output moodWord: "refined"
+
+【Example 3 — hokusai: "a fishing boat caught in a storm beneath Mt Fuji"】
+→ Reasoning: Hokusai's idiom is geometric sublime + Aizuri-e indigo dominance. Physics check: Mt Fuji must sit on the horizon BEHIND the wave (smaller, paler with bokashi sky gradient), not in front; the wave's claw-curls bend OVER the boat indicating the wave is breaking toward the viewer; the boat is tilted with bow rising on the wave's leading edge; figures inside the boat lean inward against the tilt, oars trailing in the water. Repeating fractal wave-curl pattern fills the foreground 40% of the frame.
+→ Output centralFocus: "a slim wooden fishing boat tilted bow-up on a cresting wave, three small figures crouched low inside leaning toward the boat's interior to counterbalance the tilt, two long oars trailing diagonally into the water. The wave's foreground claw-curls arc over the boat from the right edge."
+→ Output environment: "a snow-capped Mt Fuji silhouette small on the distant horizon, sky behind Fuji with a soft bokashi gradient from pale gofun-white to pale ai blue. Mid-ground sea filled with rhythmic geometric wave patterns, fractal claw-curl waves dominating the foreground lower-right."
+→ Output colorMaterial: "deep Prussian ai-blue dominance with pale gofun white wave foam, muted ochre on the boat hull, faint pine green on figure clothing, subtle warm-paper undertone. Seigaiha-wave repeating pattern across the sea surface."
+→ Output atmosphere: "bokashi gradient ONLY in the sky and distant water near Fuji, flat geometric wave curls in the foreground, stylized white spray as discrete flat shapes, fine uniform black keyblock outlines on every wave crest."
+→ Output moodWord: "sublime"
+
+【Example 4 — kuniyoshi: "a samurai on horseback shooting an arrow at a hawk in flight" (CORE TEST CASE — yabusame mounted archery)】
+→ Reasoning: This is the canonical physics trap. Kuniyoshi's musha-e idiom demands heroic dynamic action. Critical physics: (1) The bow is held in the LEFT hand at full draw, the arrow is on the LEFT side of the bow (Japanese yumi tradition), the nock (rear feathered end) is at the bow string near the rider's right ear, the arrowhead points AWAY from the rider toward the hawk — never the reverse. (2) The hawk is FARTHER away than the rider, therefore appears SMALLER in the frame than the horse's head; if the hawk is shown larger than the horse, the perspective is broken. (3) The horse is mid-gallop with diagonal legs lifted (e.g. front-right + rear-left airborne), tail streaming horizontally backward from wind; the rider sits forward in the saddle, knees gripping. (4) The arrow's flight path between bow and hawk is a STRAIGHT LINE in flat woodblock space, not a curved decorative arc. (5) The hawk's wings are spread, body small relative to the horse, positioned in the upper third of the frame for the rider to aim UP at. Composition: figure on horseback occupies lower 60%, hawk in upper third, arrow as a slim line bridging the diagonal.
+→ Output centralFocus: "a samurai in full lamellar armor mid-gallop on horseback, body twisted to face forward-up-left, holding a long bamboo yumi bow at full draw in his left hand with the arrow nocked on the LEFT side of the bow, fletching at his right ear, arrowhead pointed up-left away from him toward a small hawk in the sky. The horse is mid-gallop with front-right and rear-left legs airborne, dark mane flowing backward, tail streaming horizontally. The samurai's mempō face mask shows a fierce expression in flat sumi outline."
+→ Output environment: "a small hawk with spread wings high in the upper third of the frame, sized noticeably smaller than the horse's head to indicate distance. A pine forest mid-ground at lower-left with stylized flat green pine clusters, distant rolling hills with bokashi at the horizon. A single gnarled pine branch arches in from the upper-right corner."
+→ Output colorMaterial: "saturated vermilion lamellar armor with sumi-black lacing in visible cross-patterns, ai-blue silk hakama, gofun-white horse with sumi black mane and tail, ochre saddle with karakusa-vine brocade, deep pine green on tree clusters, gold-mon crest on the rider's sleeve."
+→ Output atmosphere: "streaming hair and tail as flat woodblock motion lines, the arrow rendered as a single slim straight line with discrete fletching feathers at the rear, no motion-blur or photographic effects, fine sumi keyblock outlines on every armor lame."
+→ Output moodWord: "heroic"
+
+━━━ SELF-CHECK (perform mentally before writing JSON) ━━━
+☑ MASTER IDIOM: Did I stay in "{{MASTER}}" voice (palette/composition/subject category) and not drift to a different master?
+☑ PHYSICS & PERSPECTIVE: Does every implied action obey real-world physics? (arrow direction, gravity on falling particles, light source casting consistent shadow direction, relative size = distance, body/limb articulation correct for the action)
+☑ PATTERN DENSITY: Did I name 1-2 specific brocade/diaper motifs and concrete fabric/armor/hair details so the image model has line-level work to draw?
+☑ AUTHENTIC PIGMENTS: Did I use Edo pigment names (gofun, beni, bengara, ai, sumi, ochre, mineral green) instead of vague "warm tones" / "earthy colors"?
+☑ COMPOSITION BALANCE: Vertical 9:19.5 frame — did I place the main figure in the lower-to-mid frame, leave breathable upper space, and include a foreground framing element (branch / cloud / drape) arching from one corner?
 
 ━━━ OUTPUT FORMAT ━━━
 Output ONLY valid JSON (no markdown fences, no commentary):
 {
   "variant": {
     "master": "{{MASTER}}",
-    "centralFocus": "specific figure(s) + action + expression",
-    "environment": "specific wider setting",
-    "colorMaterial": "{{MASTER}}-appropriate palette + textural hints",
-    "atmosphere": "motion, weather, line quality, fabric flow",
+    "centralFocus": "literal physical configuration of figures and their action",
+    "environment": "specific wider setting with materials and a foreground framing element",
+    "colorMaterial": "{{MASTER}}-appropriate Edo pigments + 1-2 brocade/diaper motifs",
+    "atmosphere": "motion, weather, line quality — all as flat woodblock effects",
     "moodWord": "single english mood word"
   }
 }`;
@@ -342,28 +370,14 @@ async function getRemainingQuota(
 
 function assemblePrompt(v: PromptVariant): string {
   const m = STYLE_MAP[v.master] || STYLE_MAP.hokusai;
-  // v1.2 (T-092): restructured to [Format][Subject][Environment]
-  // [Palette][Technique][Atmosphere][Mood][Negative]. Subject carries
-  // explicit 60-70% frame occupancy hint, environment asks for a
-  // foreground framing element (branch/cloud/bough) — both were key
-  // to matching the nano-banana-2 reference composition.
-  return `${m.preamble}
-
-[Subject] ${v.centralFocus}. The figure(s) occupy 60-70% of the vertical frame.
-
-[Environment] ${v.environment}. Include a foreground framing element (a branch, bough, fabric drape, or drifting cloud) arching in from one top corner to frame the composition.
-
-[Palette] ${m.palette} ${v.colorMaterial}
-
-[Technique] ${m.technique}
-
-[Atmosphere] ${v.atmosphere} — render any particles (leaves, snow, petals, rain, smoke) as stylized FLAT woodblock shapes, never as realistic photographic effects.
-
-[Mood] ${v.moodWord}.
-
-${UKIYO_DETAIL_MANDATE}
-
-[Format] Vertical 9:19.5 mobile-wallpaper composition, museum-quality polychrome nishiki-e (multi-block color print) circa late-Edo / early-Meiji. ${UKIYO_NEGATIVE}`;
+  // v1.4 (T-098, 2026-04-25): adopted icon-forge's narrative-art-direction
+  // pattern. Replaced the [Subject][Environment][Palette][Technique]
+  // [Atmosphere][Mood][Format] section-tagged checklist with a single
+  // continuous English art direction. The image model sees a coherent
+  // brief ("this print depicts X, rendered in Y style, with Z palette")
+  // instead of a list of slots, which preserves narrative + physics
+  // intent. Detail mandate and negative block are folded inline.
+  return `${m.preamble} The print depicts ${v.centralFocus} The figure(s) occupy 60-70% of the vertical 9:19.5 mobile-wallpaper frame, set within ${v.environment} A foreground framing element — a branch, bough, fabric drape, or drifting cloud — arches in from one top corner to anchor the composition. ${m.palette} ${v.colorMaterial} ${m.technique} ${v.atmosphere} Any particles (leaves, snow, petals, rain, smoke) appear as stylized FLAT woodblock shapes, never as realistic photographic effects. The overall mood is ${v.moodWord}. ${UKIYO_DETAIL_MANDATE} This is a museum-quality polychrome nishiki-e (multi-block color print) in the late-Edo / early-Meiji manner. ${UKIYO_NEGATIVE}`;
 }
 
 // v1.1 (T-079 F1+F3): single-prompt synthesis. master is now an explicit
