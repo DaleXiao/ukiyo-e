@@ -89,8 +89,8 @@ const DASHSCOPE_MODEL = "qwen-image-2.0-pro";
 // Gateway 内部透传到 dashscope，上游响应 schema 不变；解析逻辑 0 修改。
 // chat completions       → /v1/chat/completions    （OpenAI 兼容 shape）
 // multimodal generation  → /v1/images/generations   （native generation 端点）
-const CHAT_PATH = "/v1/chat/completions";
-const IMAGE_PATH = "/v1/images/generations";
+export const CHAT_PATH = "/v1/chat/completions";
+export const IMAGE_PATH = "/v1/images/generations";
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
@@ -390,7 +390,9 @@ function assemblePrompt(v: PromptVariant): string {
 // the 5 narrative slots. Returns a single assembled prompt string instead of
 // a tuple. Old call site that destructured [promptA, promptB] is gone
 // (single-image generation, no hstack/promptB leg).
-async function synthesizePrompt(
+// SPEC-163: exported for unit test (mock fetch verification of gateway URL,
+// auth header, retry semantics).
+export async function synthesizePrompt(
   description: string,
   master: StyleWord,
   apiKey: string,
@@ -483,7 +485,8 @@ async function synthesizePrompt(
 
 // --- Image generation ---
 
-async function generateIcon(
+// SPEC-163: exported for unit test.
+export async function generateIcon(
   prompt: string,
   apiKey: string,
   gatewayUrl: string,
