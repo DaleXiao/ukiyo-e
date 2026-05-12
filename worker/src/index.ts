@@ -1,6 +1,9 @@
 export interface Env {
   RATE_LIMIT: KVNamespace;
-  DASHSCOPE_API_KEY: string;
+  // SPEC-163: 改走 api-llm.weweekly.online gateway。
+  // 旧 dashscope secret 由 cindy 在 deploy 阶段移除（保留 30 天 rollback 窗）。
+  LLM_SERVICE_TOKEN: string;
+  LLM_GATEWAY_URL: string;
   ENVIRONMENT: string;
   GENERATION_QUEUE: DurableObjectNamespace;
   TURNSTILE_SECRET?: string;
@@ -82,10 +85,12 @@ interface SSEWriter {
 const DAILY_LIMIT = 5;
 const KIMI_MODEL = "qwen3.6-max-preview";
 const DASHSCOPE_MODEL = "qwen-image-2.0-pro";
-const DASHSCOPE_SUBMIT_URL =
-  "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
-const KIMI_API_URL =
-  "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
+// SPEC-163: endpoints 全部走 api-llm.weweekly.online gateway。
+// Gateway 内部透传到 dashscope，上游响应 schema 不变；解析逻辑 0 修改。
+// chat completions       → /v1/chat/completions    （OpenAI 兼容 shape）
+// multimodal generation  → /v1/images/generations   （native generation 端点）
+const CHAT_PATH = "/v1/chat/completions";
+const IMAGE_PATH = "/v1/images/generations";
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
@@ -389,6 +394,7 @@ async function synthesizePrompt(
   description: string,
   master: StyleWord,
   apiKey: string,
+  gatewayUrl: string,
   model: string = KIMI_MODEL
 ): Promise<string> {
   const requestBody: KimiChatRequest = {
@@ -401,10 +407,10 @@ async function synthesizePrompt(
     ],
   };
 
-  // Retry loop for Kimi API (handles 429 rate limit)
+  // Retry loop for chat completions (handles 429 rate limit)
   let response: Response | null = null;
   for (let attempt = 0; attempt < 3; attempt++) {
-    response = await fetch(KIMI_API_URL, {
+    response = await fetch(`${gatewayUrl}${CHAT_PATH}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -412,6 +418,13 @@ async function synthesizePrompt(
       },
       body: JSON.stringify(requestBody),
     });
+
+    // SPEC-163: 401 → 配置问题，不重试
+    if (response.status === 401) {
+      const errBody = await response.text();
+      console.error(`[llm-gateway] unauthorized on chat: ${errBody}`);
+      throw new Error(`LLM gateway unauthorized: ${errBody}`);
+    }
 
     if (response.status === 429 && attempt < 2) {
       const delay = Math.min(5000 * Math.pow(2, attempt), 20000);
@@ -423,7 +436,7 @@ async function synthesizePrompt(
 
   if (!response || !response.ok) {
     const errorText = response ? await response.text() : "No response";
-    throw new Error(`Kimi API error (${response?.status}): ${errorText}`);
+    throw new Error(`LLM gateway chat error (${response?.status}): ${errorText}`);
   }
 
   const data = (await response.json()) as KimiChatResponse;
@@ -473,10 +486,11 @@ async function synthesizePrompt(
 async function generateIcon(
   prompt: string,
   apiKey: string,
+  gatewayUrl: string,
   maxRetries: number = 5
 ): Promise<string> {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
-    const response = await fetch(DASHSCOPE_SUBMIT_URL, {
+    const response = await fetch(`${gatewayUrl}${IMAGE_PATH}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -514,12 +528,18 @@ async function generateIcon(
 
     if (!response.ok) {
       const errorText = await response.text();
-      if (response.status === 429 && attempt < maxRetries - 1) {
+      // SPEC-163: 401 → 配置问题，不重试
+      if (response.status === 401) {
+        console.error(`[llm-gateway] unauthorized on image: ${errorText}`);
+        throw new Error(`LLM gateway unauthorized: ${errorText}`);
+      }
+      // 429 / 502 / 503 → 重试
+      if ((response.status === 429 || response.status === 502 || response.status === 503) && attempt < maxRetries - 1) {
         const delay = Math.min(5000 * Math.pow(2, attempt), 30000);
         await new Promise((resolve) => setTimeout(resolve, delay));
         continue;
       }
-      throw new Error(`Dashscope error (${response.status}): ${errorText}`);
+      throw new Error(`LLM gateway image error (${response.status}): ${errorText}`);
     }
 
     const data = (await response.json()) as {
@@ -798,13 +818,14 @@ export class GenerationQueue {
         const prompt = await synthesizePrompt(
           task.description,
           task.master,
-          this.env.DASHSCOPE_API_KEY,
+          this.env.LLM_SERVICE_TOKEN,
+          this.env.LLM_GATEWAY_URL,
           task.promptModel
         );
 
         // Step 2: Generate one icon
         await this.waitForCooldown();
-        const url = await generateIcon(prompt, this.env.DASHSCOPE_API_KEY);
+        const url = await generateIcon(prompt, this.env.LLM_SERVICE_TOKEN, this.env.LLM_GATEWAY_URL);
         task.icons.push({ url, index: 0 });
         this.sendToTask(task.taskId, "icon_ready", { url, index: 0 });
         this.lastDashscopeFinishedAt = Date.now();
