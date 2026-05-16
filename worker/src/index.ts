@@ -1,6 +1,6 @@
 export interface Env {
   RATE_LIMIT: KVNamespace;
-  // SPEC-163: 改走 api-llm.weweekly.online gateway。
+  // SPEC-163: 改走 api-llm.openclawd.co gateway。
   // 旧 dashscope secret 由 cindy 在 deploy 阶段移除（保留 30 天 rollback 窗）。
   LLM_SERVICE_TOKEN: string;
   LLM_GATEWAY_URL: string;
@@ -85,7 +85,7 @@ interface SSEWriter {
 const DAILY_LIMIT = 5;
 const KIMI_MODEL = "qwen3.6-max-preview";
 const DASHSCOPE_MODEL = "qwen-image-2.0-pro";
-// SPEC-163: endpoints 全部走 api-llm.weweekly.online gateway。
+// SPEC-163: endpoints 全部走 api-llm.openclawd.co gateway。
 // Gateway 内部透传到 dashscope，上游响应 schema 不变；解析逻辑 0 修改。
 // chat completions       → /v1/chat/completions    （OpenAI 兼容 shape）
 // multimodal generation  → /v1/images/generations   （native generation 端点）
@@ -104,7 +104,7 @@ const TASK_TIMEOUT_MS = 120_000;
 // Read endpoints (quota) stay open so third-party status dashboards / docs can
 // probe. Update when you host the UI on a different origin.
 const ALLOWED_ORIGINS = new Set<string>([
-  "https://ukiyo.weweekly.online",
+  "https://ukiyo.openclawd.co",
   "http://localhost:5173",
   "http://localhost:4173",
   "http://127.0.0.1:5173",
@@ -301,7 +301,11 @@ async function checkBurst(
   if (count >= BURST_LIMIT) {
     return { allowed: false, retryAfter: BURST_WINDOW_SECONDS };
   }
-  await kv.put(key, String(count + 1), { expirationTtl: BURST_WINDOW_SECONDS * 2 });
+  try {
+    await kv.put(key, String(count + 1), { expirationTtl: BURST_WINDOW_SECONDS * 2 });
+  } catch (e) {
+    console.warn('[burst] KV put failed (quota?), allowing through:', (e as Error)?.message);
+  }
   return { allowed: true };
 }
 
@@ -357,7 +361,11 @@ async function incrementRateLimit(
   const current = await kv.get(key);
   const count = current ? parseInt(current, 10) : 0;
   const newCount = count + 1;
-  await kv.put(key, newCount.toString(), { expirationTtl: 86400 });
+  try {
+    await kv.put(key, newCount.toString(), { expirationTtl: 86400 });
+  } catch (e) {
+    console.warn('[ratelimit] KV put failed (quota?), allowing through:', (e as Error)?.message);
+  }
   return DAILY_LIMIT - newCount;
 }
 

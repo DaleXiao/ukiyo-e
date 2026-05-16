@@ -2,7 +2,7 @@
 
 AI Ukiyo-e wallpaper forge. Pick one of four Edo-period masters (Yoshitoshi / Utamaro / Hokusai / Kuniyoshi), type a scene, get a vertical 1320×2868 iPhone-ready wallpaper rendered in that master's idiom.
 
-**Live**: [ukiyo.weweekly.online](https://ukiyo.weweekly.online)
+**Live**: [ukiyo.openclawd.co](https://ukiyo.openclawd.co)
 
 ## Architecture
 

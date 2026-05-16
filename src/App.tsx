@@ -40,7 +40,7 @@ const DEFAULT_MASTER: MasterId = 'hokusai'
 
 // T-086 F2: BREATHE_FRAMES + BREATHE_FRAME_MS removed with BreatheSpinner. Rain spinner needs no frame table (pure CSS).
 
-const API_BASE = import.meta.env.PROD ? 'https://api-ukiyo.weweekly.online/api' : '/api'
+const API_BASE = import.meta.env.PROD ? 'https://api-ukiyo.openclawd.co/api' : '/api'
 const _params = new URLSearchParams(window.location.search)
 const TEST_PARAM = _params.has('test') ? '?test' : ''
 
@@ -776,7 +776,7 @@ export default function App() {
 
       {/* Footer */}
       <footer className="mt-auto pt-20 pb-8">
-        <a href="https://weweekly.online" target="_blank" rel="noopener" className="text-warm-400 dark:text-warm-700 text-xs font-light tracking-wider hover:text-warm-500 dark:hover:text-warm-500 transition-colors" style={{textDecoration:'none'}}>
+        <a href="https://openclawd.co" target="_blank" rel="noopener" className="text-warm-400 dark:text-warm-700 text-xs font-light tracking-wider hover:text-warm-500 dark:hover:text-warm-500 transition-colors" style={{textDecoration:'none'}}>
           Tinker Lab / 折腾实验室
         </a>
       </footer>

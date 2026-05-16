@@ -16,7 +16,7 @@ import {
   IMAGE_PATH,
 } from "../src/index";
 
-const GATEWAY = "https://api-llm.weweekly.online";
+const GATEWAY = "https://api-llm.openclawd.co";
 const TOKEN = "test-llm-service-token-xyz";
 
 function chatOk(content: string) {
