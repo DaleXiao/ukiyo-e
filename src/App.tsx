@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useT, toggleLang } from './i18n'
 
 // --- Types ---
 
@@ -30,11 +31,11 @@ type GenerationPhase = 'idle' | 'queued' | 'generating' | 'complete' | 'error'
 // emit internal id over the wire. Default selection is hokusai (spec).
 type MasterId = 'yoshitoshi' | 'utamaro' | 'hokusai' | 'kuniyoshi'
 
-const MASTERS: { id: MasterId; label: string; tooltip: string }[] = [
-  { id: 'yoshitoshi', label: '月冈芳年', tooltip: '戏剧 / 惊悚 / 超自然' },
-  { id: 'utamaro',    label: '喜多川歌麿', tooltip: '优雅人物 / Bijin-ga' },
-  { id: 'hokusai',    label: '葛饰北斋', tooltip: '山水 / Aizuri 蓝（默认）' },
-  { id: 'kuniyoshi',  label: '歌川国芳', tooltip: '武者 / 动感 / 神话' },
+const MASTERS: { id: MasterId; labelKey: string; tooltipKey: string }[] = [
+  { id: 'yoshitoshi', labelKey: 'master.yoshitoshi.label', tooltipKey: 'master.yoshitoshi.tooltip' },
+  { id: 'utamaro',    labelKey: 'master.utamaro.label',    tooltipKey: 'master.utamaro.tooltip' },
+  { id: 'hokusai',    labelKey: 'master.hokusai.label',    tooltipKey: 'master.hokusai.tooltip' },
+  { id: 'kuniyoshi',  labelKey: 'master.kuniyoshi.label',  tooltipKey: 'master.kuniyoshi.tooltip' },
 ]
 const DEFAULT_MASTER: MasterId = 'hokusai'
 
@@ -130,12 +131,14 @@ applyTheme(getStoredTheme())
 // --- Theme Toggle Component ---
 
 function ThemeToggle({ theme, onToggle }: { theme: Theme; onToggle: () => void }) {
+  const t = useT()
+  const label = t(theme === 'dark' ? 'theme.toLight' : 'theme.toDark')
   return (
     <button
       onClick={onToggle}
       className="theme-toggle fixed top-5 right-5 z-50 w-10 h-10 rounded-full flex items-center justify-center bg-white/80 dark:bg-warm-850/80 border border-warm-200 dark:border-warm-700/40 shadow-warm-sm dark:shadow-warm-md backdrop-blur-sm focus-warm"
-      aria-label={theme === 'dark' ? '切换到浅色模式' : '切换到深色模式'}
-      title={theme === 'dark' ? '切换到浅色模式' : '切换到深色模式'}
+      aria-label={label}
+      title={label}
     >
       {theme === 'dark' ? (
         // Sun icon — shown in dark mode, click to go light
@@ -153,9 +156,26 @@ function ThemeToggle({ theme, onToggle }: { theme: Theme; onToggle: () => void }
   )
 }
 
+// --- Lang Toggle Component ---
+
+function LangToggle() {
+  const t = useT()
+  return (
+    <button
+      onClick={() => toggleLang()}
+      className="theme-toggle fixed top-5 right-16 z-50 h-10 min-w-10 px-3 rounded-full flex items-center justify-center bg-white/80 dark:bg-warm-850/80 border border-warm-200 dark:border-warm-700/40 shadow-warm-sm dark:shadow-warm-md backdrop-blur-sm focus-warm text-sm font-medium text-warm-700 dark:text-warm-300"
+      aria-label={t('lang.toggleTitle')}
+      title={t('lang.toggleTitle')}
+    >
+      {t('lang.toggleLabel')}
+    </button>
+  )
+}
+
 // --- App Component ---
 
 export default function App() {
+  const t = useT()
   const [description, setDescription] = useState('')
   const [loading, setLoading] = useState(false)
   const [icons, setIcons] = useState<IconResult[]>([])
@@ -305,7 +325,7 @@ export default function App() {
             setLoading(false)
           }, 300)
         } else if (data.state === 'error') {
-          setError(data.error || '生成失败，请重试')
+          setError(data.error || t('err.generateFailed'))
           setPhase('error')
           setLoading(false)
           if (eventSourceRef.current) {
@@ -414,9 +434,9 @@ export default function App() {
     es.addEventListener('error', (e) => {
       try {
         const data = JSON.parse((e as MessageEvent).data)
-        setError(data.message || '生成失败，请重试')
+        setError(data.message || t('err.generateFailed'))
       } catch {
-        setError('连接中断，请重试')
+        setError(t('err.connectionBroken'))
       }
       setPhase('error')
       setLoading(false)
@@ -442,7 +462,7 @@ export default function App() {
       } else {
         setPhase((prev) => {
           if (prev === 'complete' || prev === 'error') return prev
-          setError('连接中断，请重试')
+          setError(t('err.connectionBroken'))
           setLoading(false)
           return 'error'
         })
@@ -467,11 +487,11 @@ export default function App() {
   const handleGenerate = useCallback(async () => {
     const trimmed = description.trim()
     if (!trimmed || trimmed.length < 2) {
-      setError('请输入至少 2 个字的描述')
+      setError(t('err.tooShort'))
       return
     }
     if (trimmed.length > 200) {
-      setError('描述不能超过 200 字')
+      setError(t('err.tooLong'))
       return
     }
 
@@ -519,7 +539,7 @@ export default function App() {
 
       if (res.status === 503) {
         const data = await res.json()
-        setError(data.message || '当前使用人数较多，请 30 秒后再试')
+        setError(data.message || t('err.tooBusy'))
         setPhase('error')
         setLoading(false)
         startRetryCountdown(data.retryAfter || 30)
@@ -536,7 +556,7 @@ export default function App() {
 
       if (!res.ok) {
         const data: ErrorResponse = await res.json()
-        setError(data.message || '生成失败，请重试')
+        setError(data.message || t('err.generateFailed'))
         setPhase('error')
         setLoading(false)
         return
@@ -547,11 +567,11 @@ export default function App() {
       setQueuePosition(data.position)
       startSSE(data.taskId)
     } catch {
-      setError('网络错误，请检查连接后重试')
+      setError(t('err.network'))
       setPhase('error')
       setLoading(false)
     }
-  }, [description, master])
+  }, [description, master, t])
 
   // T-079 F3: clicking a master chip just selects it (no auto-generate).
   // Switching master mid-generation doesn't cancel the in-flight request —
@@ -591,8 +611,9 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col items-center px-5 py-16 sm:py-24 bg-[#FAFAF7] dark:bg-warm-950">
-      {/* Theme Toggle */}
+      {/* Theme + Lang Toggles */}
       <ThemeToggle theme={theme} onToggle={toggleTheme} />
+      <LangToggle />
 
       {/* Header */}
       <header className="text-center mb-12 sm:mb-16 animate-fade-in">
@@ -600,10 +621,10 @@ export default function App() {
           <img src="/favicon.png" alt="Ukiyo-e" className="w-10 h-10 rounded-lg" />
         </div>
         <h1 className="text-3xl sm:text-4xl font-semibold text-warm-800 dark:text-warm-100 tracking-tight leading-tight">
-          浮世绘
+          {t('hero.brand')}
         </h1>
         <p className="mt-2.5 text-warm-500 dark:text-warm-400 text-base sm:text-lg font-light tracking-wide">
-          描述场景，生成浮世绘风壁纸
+          {t('hero.subtitle')}
         </p>
       </header>
 
@@ -618,7 +639,7 @@ export default function App() {
               setError(null)
             }}
             onKeyDown={handleKeyDown}
-            placeholder="描述场景，例：富士山与高铁动车..."
+            placeholder={t('input.placeholder')}
             maxLength={200}
             disabled={loading}
             rows={1}
@@ -648,10 +669,10 @@ export default function App() {
             {loading ? (
               <span className="flex items-center gap-2">
                 <LoadingSpinner />
-                <span>生成中</span>
+                <span>{t('btn.generating')}</span>
               </span>
             ) : (
-              <span>生成</span>
+              <span>{t('btn.generate')}</span>
             )}
           </button>
         </div>
@@ -661,7 +682,7 @@ export default function App() {
             visually highlighted; click swaps selection (no auto-generate).
             T-086 F1: prepend "画家风格" label to group chips (使单行语义更明确). */}
         <div className="mt-5 flex flex-wrap items-center gap-2 justify-center stagger">
-          <span className="text-warm-500 dark:text-warm-600 text-xs mr-2 tracking-wide">画家风格</span>
+          <span className="text-warm-500 dark:text-warm-600 text-xs mr-2 tracking-wide">{t('master.groupLabel')}</span>
           {MASTERS.map((m) => {
             const selected = m.id === master
             return (
@@ -669,7 +690,7 @@ export default function App() {
                 key={m.id}
                 onClick={() => handleMasterChange(m.id)}
                 disabled={loading}
-                title={m.tooltip}
+                title={t(m.tooltipKey)}
                 aria-pressed={selected}
                 className={`example-pill text-sm px-3 py-1.5 rounded-full border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                   selected
@@ -677,7 +698,7 @@ export default function App() {
                     : 'border-warm-200 dark:border-warm-800/50 text-warm-500'
                 }`}
               >
-                {m.label}
+                {t(m.labelKey)}
               </button>
             )
           })}
@@ -697,12 +718,12 @@ export default function App() {
           {/* Status text — T-079 F6: breathe spinner replaces sun emoji */}
           <p className="text-center text-warm-500 dark:text-warm-600 text-sm font-light mb-5 tracking-wide">
             {phase === 'queued' && queuePosition > 1
-              ? `排队中，前面 ${queuePosition - 1} 人...`
+              ? t('status.queue', { n: queuePosition - 1 })
               : phase === 'queued'
-                ? '准备中...'
+                ? t('status.preparing')
                 : phase === 'generating'
-                  ? <><RainSpinner />正在锻造 <span className="text-warm-700 dark:text-warm-400 font-medium tabular-nums">{progress}%</span></>
-                  : '生成中...'}
+                  ? <><RainSpinner />{t('status.forging')}<span className="text-warm-700 dark:text-warm-400 font-medium tabular-nums">{progress}%</span></>
+                  : t('status.generating')}
           </p>
           {/* T-079 F1: single-card layout. Mobile ~95vw via max-w + page
               padding; desktop tops out at max-w-md (~448px) so the card stays
@@ -716,7 +737,7 @@ export default function App() {
           </div>
           {/* Don't refresh hint */}
           <p className="text-center text-warm-400 dark:text-warm-700 text-xs font-light mt-4 tracking-wide">
-            请不要关闭或刷新页面
+            {t('status.dontClose')}
           </p>
         </div>
       )}
@@ -750,7 +771,7 @@ export default function App() {
       {retryCountdown > 0 && !loading && (
         <div className="mt-5 text-center animate-fade-in">
           <p className="text-warm-500 dark:text-warm-600 text-sm font-light">
-            <span className="text-warm-700 dark:text-warm-400 font-medium tabular-nums">{retryCountdown}</span> 秒后可重试
+            <span className="text-warm-700 dark:text-warm-400 font-medium tabular-nums">{retryCountdown}</span> {t('status.retryAfter')}
           </p>
         </div>
       )}
@@ -760,15 +781,15 @@ export default function App() {
         <div className="mt-10 text-center animate-fade-in">
           {rateLimited ? (
             <p className="text-warm-500 dark:text-warm-600 text-sm font-light">
-              内测中，每日限额已用完，请明天再来
+              {t('quota.dailyExhausted')}
             </p>
           ) : (
             <p className="text-warm-500 dark:text-warm-600 text-sm font-light tracking-wide">
-              今日剩余{' '}
+              {t('quota.todayLeft')}{' '}
               <span className="text-warm-700 dark:text-warm-400 font-medium tabular-nums">
                 {remaining}/{total}
               </span>{' '}
-              次
+              {t('quota.timesUnit')}
             </p>
           )}
         </div>
@@ -777,7 +798,7 @@ export default function App() {
       {/* Footer */}
       <footer className="mt-auto pt-20 pb-8">
         <a href="https://openclawd.co" target="_blank" rel="noopener" className="text-warm-400 dark:text-warm-700 text-xs font-light tracking-wider hover:text-warm-500 dark:hover:text-warm-500 transition-colors" style={{textDecoration:'none'}}>
-          Tinker Lab / 折腾实验室
+          {t('footer.brand')}
         </a>
       </footer>
     </div>
@@ -837,11 +858,12 @@ function SingleCard({
   onClick: () => void
   onDownload: (url: string, index: number) => void
 }) {
+  const t = useT()
   return (
     <div className="icon-card relative w-full max-w-[240px] rounded-2.5xl overflow-hidden bg-white dark:bg-warm-900/60 border border-warm-200 dark:border-warm-800/30 shadow-warm-sm dark:shadow-card animate-slide-up">
       <button
         onClick={onClick}
-        aria-label="点击查看大图"
+        aria-label={t('btn.viewLarge')}
         className="block w-full bg-[#FAFAF7] dark:bg-warm-950 p-0 cursor-zoom-in focus-warm"
         style={{ aspectRatio: '1320 / 2868' }}
       >
@@ -859,8 +881,8 @@ function SingleCard({
           e.stopPropagation()
           onDownload(icon.url, icon.index)
         }}
-        aria-label="下载壁纸"
-        title="下载壁纸"
+        aria-label={t('btn.downloadWallpaper')}
+        title={t('btn.downloadWallpaper')}
         className="absolute bottom-3 right-3 w-11 h-11 rounded-full flex items-center justify-center bg-white/90 dark:bg-warm-900/80 backdrop-blur-md text-warm-700 dark:text-warm-200 hover:bg-white dark:hover:bg-warm-900 shadow-warm-md transition-colors focus-warm"
       >
         <DownloadIcon />
@@ -883,6 +905,7 @@ function Lightbox({
   onClose: () => void
   onDownload: () => void
 }) {
+  const t = useT()
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -903,11 +926,11 @@ function Lightbox({
       className="fixed inset-0 z-[100] bg-black/95 flex items-center justify-center cursor-zoom-out animate-fade-in"
       role="dialog"
       aria-modal="true"
-      aria-label="壁纸全屏预览"
+      aria-label={t('btn.fullscreenAria')}
     >
       <img
         src={url}
-        alt="壁纸全屏预览"
+        alt={t('btn.fullscreenAria')}
         className="max-w-full max-h-full object-contain select-none"
         draggable={false}
       />
@@ -916,8 +939,8 @@ function Lightbox({
           e.stopPropagation()
           onDownload()
         }}
-        aria-label="下载壁纸"
-        title="下载壁纸"
+        aria-label={t('btn.downloadWallpaper')}
+        title={t('btn.downloadWallpaper')}
         className="absolute bottom-6 right-6 w-12 h-12 rounded-full flex items-center justify-center bg-white/90 text-warm-800 hover:bg-white shadow-warm-md transition-colors focus-warm"
       >
         <DownloadIcon />
