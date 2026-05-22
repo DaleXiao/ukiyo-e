@@ -178,7 +178,19 @@ const UKIYO_NEGATIVE = "NOT photorealistic, NOT 3D rendered, NOT digital paintin
 // Fix: flat COLOR (no 3D shading) is preserved, but LINE-level detail is
 // now a hard requirement — museum nishiki-e prints carry enormous keyblock
 // detail inside flat color planes.
-const UKIYO_DETAIL_MANDATE = "Detail level is museum nishiki-e: dense, meticulous keyblock linework inside every flat color plane. Fabrics must display ornate brocade / kimono patterns (fine repeating motifs: seigaiha waves, kikkō hexagons, shippō circles, karakusa vines, stylized cranes, maple leaves, floral diapers, cloud scrolls — pick what fits the subject). Armor (if any) must show individual lames / scales / kozane laced in visible cross-patterns, with metal fittings, braid cords, and tassels drawn one-by-one. Horses (if any) must show individual harness straps, visible rivets / metal ornaments on bridle and saddle, tassels rendered as discrete gold/red bundles. Hair must show individual strands / braided cords. Wood surfaces (gates, beams, torii) must show grain lines and iron reinforcement bands. Stone surfaces (walls, lanterns) must show individual block joints. All of this detail lives IN THE KEYBLOCK LINE DRAWING, never as 3D shading. Line density matches 19th-century Edo polychrome nishiki-e (think Yoshitoshi's 'Hundred Aspects of the Moon' or Kuniyoshi warrior prints) — NOT a modern simplified illustration.";
+const UKIYO_DETAIL_MANDATE = "Detail level is museum nishiki-e: dense, meticulous keyblock linework inside every flat color plane. Fabrics must display ornate brocade / kimono patterns (fine repeating motifs: seigaiha waves, kikkō hexagons, shippō circles, karakusa vines, stylized cranes, maple leaves, floral diapers, cloud scrolls — pick what fits the subject). Armor (if any) must show individual lames / scales / kozane laced in visible cross-patterns, with metal fittings, braid cords, and tassels drawn one-by-one. Horses (if any) must show individual harness straps, visible rivets / metal ornaments on bridle and saddle, tassels rendered as discrete gold/red bundles. Hair must show individual strands / braided cords. Wood surfaces (gates, beams, torii) must show grain lines and iron reinforcement bands. Stone surfaces (walls, lanterns) must show individual block joints. THE ENVIRONMENT IS NOT A BLANK BACKDROP — it must carry equivalent line-level detail: every tree shows individual leaf clusters or pine-needle bundles; every cliff or mountain shows striated rock-face contour lines; every cloud shows internal curling sumi-wash striations (not flat white blobs); every body of water shows rhythmic seigaiha or fractal claw-curl patterns across its surface; every ground plane shows grass tussocks, pebbles, or moss patches rendered as discrete shapes; every architectural element (rooflines, walls, fences) shows tile rows / wood-grain / brick joints. All of this detail lives IN THE KEYBLOCK LINE DRAWING, never as 3D shading. Line density matches 19th-century Edo polychrome nishiki-e (think Yoshitoshi's 'Hundred Aspects of the Moon' or Kuniyoshi warrior prints) — NOT a modern simplified illustration.";
+
+// v1.5 (2026-05-22): atmosphere & depth mandate. Dale benchmark: 'background
+// too plain, no layering, mood weaker than nano-banana-2 / gpt-image-2'.
+//   - Force 3-tier spatial composition (foreground frame / mid-ground figure
+//     / atmospheric far-ground), each tier explicitly populated.
+//   - Light source + time-of-day + how light falls on the subject is now a
+//     hard slot, not folded into 'atmosphere'. Mood = light + composition,
+//     not just keyblock effects.
+const UKIYO_DEPTH_MANDATE = "THREE-TIER SPATIAL COMPOSITION is mandatory. (1) FOREGROUND — a near-frame anchor element that arches in from one corner (a leafy branch, a rope curtain, a fluttering banner, a stone-lantern silhouette, a tilted parasol edge, a rope-wrapped pine bough) rendered with the largest scale and the boldest keyblock lines. (2) MID-GROUND — the figure(s) and their immediate context (saddle, lantern, weapon, parasol), sharply outlined at full keyblock density. (3) FAR-GROUND / ATMOSPHERIC DISTANCE — distant landscape elements (mountain ridges, water expanses, cloud banks, a temple silhouette, drifting flocks of birds) rendered with thinner lines and softer bokashi gradient pigments to recede. Negative space between tiers must be filled with PURPOSEFUL atmospheric content (mist scrolls, falling petals, drifting clouds, vertical sumi rain lines, layered fog bands), never left as blank empty paper.";
+
+const UKIYO_LIGHT_MANDATE = "LIGHTING & TIME OF DAY are explicit, not implied. Name a single dominant light source (full moon directly overhead / setting sun at low-left horizon / pre-dawn cold blue light from upper-right / lantern flame at figure's chest / lightning flash through storm clouds) and describe the SHAPE OF THE LIGHT POOL it casts on the main figure: which surfaces catch warm gofun white, which fall into deep sumi shadow areas (rendered as flat keyblock fills, never as photographic gradients). The light direction must be physically consistent across the whole scene — if moonlight comes from upper-right, every cast shadow falls lower-left.";
+
 
 // v1.4 (T-098, 2026-04-25): adopted icon-forge prompt engine pattern —
 // CORE PRINCIPLE narrative anchor + 4 master-specific few-shot examples
@@ -241,6 +253,8 @@ Study the REASONING. Do NOT copy these scenes — invent your own that fit the u
 ☑ MASTER IDIOM: Did I stay in "{{MASTER}}" voice (palette/composition/subject category) and not drift to a different master?
 ☑ PHYSICS & PERSPECTIVE: Does every implied action obey real-world physics? (arrow direction, gravity on falling particles, light source casting consistent shadow direction, relative size = distance, body/limb articulation correct for the action)
 ☑ PATTERN DENSITY: Did I name 1-2 specific brocade/diaper motifs and concrete fabric/armor/hair details so the image model has line-level work to draw?
+☑ ENVIRONMENT DEPTH: Did the environment slot describe THREE distinct depth tiers (a near foreground frame element + the figure's immediate mid-ground context + a distant atmospheric layer with bokashi)? Empty paper between tiers must be filled with mist / clouds / falling particles / rain lines.
+☑ LIGHT & TIME: Did I name a single light source (moon position, lantern, low sun, storm flash, dawn glow) and say which surfaces of the figure catch warm light vs which fall into flat sumi shadow? Light direction must be physically consistent.
 ☑ AUTHENTIC PIGMENTS: Did I use Edo pigment names (gofun, beni, bengara, ai, sumi, ochre, mineral green) instead of vague "warm tones" / "earthy colors"?
 ☑ COMPOSITION BALANCE: Vertical 9:19.5 frame — did I place the main figure in the lower-to-mid frame, leave breathable upper space, and include a foreground framing element (branch / cloud / drape) arching from one corner?
 
@@ -250,9 +264,9 @@ Output ONLY valid JSON (no markdown fences, no commentary):
   "variant": {
     "master": "{{MASTER}}",
     "centralFocus": "literal physical configuration of figures and their action",
-    "environment": "specific wider setting with materials and a foreground framing element",
+    "environment": "three depth tiers — foreground anchor (branch/drape/lantern) + figure mid-ground context + distant atmospheric layer (mountains/sea/clouds/temple) with bokashi recession",
     "colorMaterial": "{{MASTER}}-appropriate Edo pigments + 1-2 brocade/diaper motifs",
-    "atmosphere": "motion, weather, line quality — all as flat woodblock effects",
+    "atmosphere": "explicit light source + time of day + how light falls on the main figure + motion/weather as flat woodblock effects",
     "moodWord": "single english mood word"
   }
 }`;
@@ -390,7 +404,7 @@ function assemblePrompt(v: PromptVariant): string {
   // brief ("this print depicts X, rendered in Y style, with Z palette")
   // instead of a list of slots, which preserves narrative + physics
   // intent. Detail mandate and negative block are folded inline.
-  return `${m.preamble} The print depicts ${v.centralFocus} The figure(s) occupy 60-70% of the vertical 9:19.5 mobile-wallpaper frame, set within ${v.environment} A foreground framing element — a branch, bough, fabric drape, or drifting cloud — arches in from one top corner to anchor the composition. ${m.palette} ${v.colorMaterial} ${m.technique} ${v.atmosphere} Any particles (leaves, snow, petals, rain, smoke) appear as stylized FLAT woodblock shapes, never as realistic photographic effects. The overall mood is ${v.moodWord}. ${UKIYO_DETAIL_MANDATE} This is a museum-quality polychrome nishiki-e (multi-block color print) in the late-Edo / early-Meiji manner. ${UKIYO_NEGATIVE}`;
+  return `${m.preamble} The print depicts ${v.centralFocus} The figure(s) occupy 60-70% of the vertical 9:19.5 mobile-wallpaper frame, set within ${v.environment} A foreground framing element — a branch, bough, fabric drape, or drifting cloud — arches in from one top corner to anchor the composition. ${m.palette} ${v.colorMaterial} ${m.technique} ${v.atmosphere} Any particles (leaves, snow, petals, rain, smoke) appear as stylized FLAT woodblock shapes, never as realistic photographic effects. The overall mood is ${v.moodWord}. ${UKIYO_DEPTH_MANDATE} ${UKIYO_LIGHT_MANDATE} ${UKIYO_DETAIL_MANDATE} This is a museum-quality polychrome nishiki-e (multi-block color print) in the late-Edo / early-Meiji manner. ${UKIYO_NEGATIVE}`;
 }
 
 // v1.1 (T-079 F1+F3): single-prompt synthesis. master is now an explicit
