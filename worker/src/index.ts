@@ -83,7 +83,7 @@ interface SSEWriter {
 // --- Constants ---
 
 const DAILY_LIMIT = 5;
-const KIMI_MODEL = "qwen3.6-max-preview";
+const KIMI_MODEL = "qwen3.7-max"; // SPEC-235 followup: prompt LLM 升 qwen3.7-max(生图模型 qwen-image-2.0-pro 不变)
 const DASHSCOPE_MODEL = "qwen-image-2.0-pro";
 // SPEC-163: endpoints 全部走 api-llm.openclawd.co gateway。
 // Gateway 内部透传到 dashscope，上游响应 schema 不变；解析逻辑 0 修改。
