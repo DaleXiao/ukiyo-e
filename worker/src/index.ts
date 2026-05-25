@@ -48,8 +48,25 @@ interface PromptVariant {
 // variant — the master is now picked by the user via 4-chip UI (F3), and
 // hstack/promptB is gone (F1). Kept the wrapper interface so the
 // prompt-extender LLM call can still keep its JSON schema explicit.
+//
+// SPEC-252: anatomy_audit is the LLM's own self-reflection record from the
+// in-prompt PROCEDURE (draft → anatomy_audit → rewrite). Optional for backward
+// compat with any cached / older responses. Logged in worker tail so we can
+// observe rewrite_applied ratio and high-frequency ambiguity patterns.
+interface AnatomyAuditHandRecord {
+  figure: number;
+  left_hand: string;
+  right_hand: string;
+}
+interface AnatomyAudit {
+  figure_count: number;
+  hands_per_figure: AnatomyAuditHandRecord[];
+  ambiguity_found: string; // "none" when no issue
+  rewrite_applied: boolean;
+}
 interface PromptResponse {
   variant: PromptVariant;
+  anatomy_audit?: AnatomyAudit;
 }
 
 interface QueueTask {
@@ -257,6 +274,31 @@ Study the REASONING. Do NOT copy these scenes — invent your own that fit the u
 → Output atmosphere: "streaming hair and tail as flat woodblock motion lines, the arrow rendered as a single slim straight line with discrete fletching feathers at the rear, no motion-blur or photographic effects, fine sumi keyblock outlines on every armor lame."
 → Output moodWord: "heroic"
 
+━━━ PROCEDURE (SPEC-252: 3-step self-audit; you MUST follow in order before emitting JSON) ━━━
+You must perform these 3 steps inside this single response. The JSON you emit reflects the POST-AUDIT state. Treat this as your private reasoning process; only the final JSON is output.
+
+STEP 1 — DRAFT: Write the centralFocus first pass (do not output yet). Describe the figures, their hands, the objects they hold or touch.
+
+STEP 2 — ANATOMY SELF-AUDIT: Inspect your STEP-1 draft against this checklist. Fill out the anatomy_audit object as you go.
+  (a) figure_count: how many human figures did you describe? Count them. A "distant figure" or "half-obscured scout" still counts.
+  (b) hands_per_figure: for EACH figure, name what its LEFT hand is doing and what its RIGHT hand is doing — distinct, non-overlapping descriptions. Both hands of one figure cannot be doing the same thing simultaneously unless explicitly bimanual ("both hands gripping the bow"). If a hand is hidden / behind back / inside sleeve, write "hidden in sleeve" or "resting at side" — explicit beats absent.
+  (c) ambiguity_found: scan for these failure patterns and list any you find (comma-separated, or "none"):
+      • Plural-without-side: "her hands" / "his hands" / "both hands" used without specifying which hand does what (image model will hallucinate a third hand to satisfy both descriptions).
+      • Ambiguous-or: phrases like "holding A or playing with B" / "either gripping the reins or reaching forward" (the model renders BOTH, producing extra limbs).
+      • Unanchored-object: an object (fan, hairpin, sword, reins, arrow) mentioned without explicitly saying which hand holds it (model spawns a hand from nowhere).
+      • Hand-count-exceeds-two: any figure with more than 2 hand actions described (e.g. holding fan + adjusting collar + raising hairpin = 3 actions for 1 person).
+      • Duplicate-limb: same limb described twice with conflicting positions ("her right arm at her side, her right arm raised").
+      • Object-touched-by-more-than-2-hands: a single object (a single bow, a single fan) described as touched by 3+ hands across figures without that being the intent.
+  (d) rewrite_applied: if ambiguity_found != "none", you MUST rewrite centralFocus in STEP 3 and set this to true. Otherwise false.
+
+STEP 3 — REWRITE (only if STEP-2 flagged anything): Rewrite centralFocus to explicitly assign each hand. Use the pattern: "left hand <doing X>, right hand <doing Y>". For hidden hands, say so. For a single object, name exactly one hand. Examples of fixes:
+  • BAD: "holding the base or playing with hair" → GOOD: "left hand fingertips pinching a single strand of hair, right hand holding the lacquered hairpin"
+  • BAD: "her hands adjusting her collar" → GOOD: "left hand at her left collar edge, right hand at her right collar edge"
+  • BAD: "both hands on the bow while drawing the arrow" → GOOD: "left hand gripping the bow's middle, right hand at full draw pulling the string near the right ear" (the arrow is nocked, no third hand needed)
+  • BAD: "holding a fan, reaching for tea, fixing her hair" (3 actions, 1 figure) → GOOD: drop one or reassign across two figures.
+
+The JSON you emit must reflect the REWRITTEN centralFocus (post-STEP-3), and the anatomy_audit object must accurately log what you did.
+
 ━━━ SELF-CHECK (perform mentally before writing JSON) ━━━
 ☑ MASTER IDIOM: Did I stay in "{{MASTER}}" voice (palette/composition/subject category) and not drift to a different master?
 ☑ PHYSICS & PERSPECTIVE: Does every implied action obey real-world physics? (arrow direction, gravity on falling particles, light source casting consistent shadow direction, relative size = distance, body/limb articulation correct for the action)
@@ -267,11 +309,19 @@ Study the REASONING. Do NOT copy these scenes — invent your own that fit the u
 ☑ COMPOSITION BALANCE: Vertical 9:19.5 frame — did I place the main figure in the lower-to-mid frame, leave breathable upper space, and include a foreground framing element (branch / cloud / drape) arching from one corner?
 
 ━━━ OUTPUT FORMAT ━━━
-Output ONLY valid JSON (no markdown fences, no commentary):
+Output ONLY valid JSON (no markdown fences, no commentary). Both anatomy_audit and variant are REQUIRED top-level fields:
 {
+  "anatomy_audit": {
+    "figure_count": <integer>,
+    "hands_per_figure": [
+      { "figure": 1, "left_hand": "<what left hand does, or 'hidden'>", "right_hand": "<what right hand does, or 'hidden'>" }
+    ],
+    "ambiguity_found": "<comma-separated failure patterns from STEP 2, or 'none'>",
+    "rewrite_applied": <true|false>
+  },
   "variant": {
     "master": "{{MASTER}}",
-    "centralFocus": "literal physical configuration of figures and their action",
+    "centralFocus": "literal physical configuration of figures and their action (post-rewrite if rewrite_applied=true); each figure's left/right hands must be explicitly assigned",
     "environment": "three depth tiers — foreground anchor (branch/drape/lantern) + figure mid-ground context + distant atmospheric layer (mountains/sea/clouds/temple) with bokashi recession",
     "colorMaterial": "{{MASTER}}-appropriate Edo pigments + 1-2 brocade/diaper motifs",
     "atmosphere": "explicit light source + time of day + how light falls on the main figure + motion/weather as flat woodblock effects",
@@ -489,6 +539,16 @@ export async function synthesizePrompt(
     parsed = JSON.parse(cleaned) as PromptResponse;
   } catch {
     throw new Error(`Failed to parse Kimi response as JSON: ${content}`);
+  }
+
+  // SPEC-252: log the LLM's self-audit so we can observe rewrite_applied ratio
+  // and high-frequency ambiguity patterns from worker tail in prod. Optional
+  // field — older / non-conforming responses simply log "undefined" and the
+  // rest of the pipeline keeps working (variant block is unchanged shape).
+  try {
+    console.log("[anatomy_audit]", JSON.stringify(parsed.anatomy_audit));
+  } catch {
+    /* never let a logging failure break prompt synth */
   }
 
   const v = parsed.variant;
