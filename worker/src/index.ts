@@ -164,25 +164,25 @@ function taskCacheKey(taskId: string): string {
 const STYLE_MAP: Record<StyleWord, { name: string; preamble: string; palette: string; technique: string }> = {
   yoshitoshi: {
     name: 'Yoshitoshi Tsukioka (月冈芳年)',
-    preamble: "A vertical Japanese Ukiyo-e woodblock print in the style of Yoshitoshi Tsukioka.",
+    preamble: "A vertical Japanese Ukiyo-e woodblock print in the style of Yoshitoshi Tsukioka's late-Edo / early-Meiji muzan-e and ghost prints (1860s-80s).",
     palette: "Deep bengara crimson, dark ai indigo, murky sumi wash gray, pale gofun white, scattered beni red accents. Aged washi paper substrate with visible fiber texture and woodblock grain.",
     technique: "Diagonal dynamic composition with dramatic negative space. Expressive black keyblock outlines varying thick-to-thin for energy. Flat color planes with NO realistic shading on figures. Muzan-e / ghost-print idiom: psychological intensity, macabre or supernatural undertones.",
   },
   utamaro: {
     name: 'Kitagawa Utamaro (喜多川歌麿)',
-    preamble: "A vertical Japanese Ukiyo-e woodblock print in the style of Kitagawa Utamaro.",
+    preamble: "A vertical Japanese Ukiyo-e woodblock print in the style of Kitagawa Utamaro's late-Edo bijin-ga and Ōkubi-e (1790s).",
     palette: "Warm cream washi paper, soft beni rouge, pale ochre, subtle mineral green, gofun white for the face and skin, thin sumi ink for eyebrows and eye slits. Delicate aged washi fiber texture.",
     technique: "Asymmetric intimate close-up framing (Bijin-ga / Ōkubi-e sensibility). Ultra-fine uniform keyblock outlines. ABSOLUTELY FLAT color with NO facial shading, NO modeling on cheeks or neck. Emphasis on exquisite line work and refined sensuality.",
   },
   hokusai: {
     name: 'Katsushika Hokusai (葛饰北斋)',
-    preamble: "A vertical polychrome Japanese Ukiyo-e woodblock print in the style of Katsushika Hokusai.",
+    preamble: "A vertical polychrome Japanese Ukiyo-e woodblock print in the style of Katsushika Hokusai's polychrome series prints (1820s-30s, \"Thirty-six Views of Mt. Fuji\" tier).",
     palette: "Aizuri-e indigo-dominant: deep ai blue, pale gofun white, muted ochre, faint pine green, subtle warm-paper undertone. Aged washi substrate with visible fibers.",
     technique: "Mathematically balanced composition with geometric perspective. Fine rhythmic black keyblock lines. Flat mineral pigment planes. Bokashi gradient ONLY in sky and distant water (never on figures or foreground objects). Fractal repeating patterns for waves, clouds, branches.",
   },
   kuniyoshi: {
     name: 'Utagawa Kuniyoshi (歌川国芳)',
-    preamble: "A vertical polychrome Japanese Ukiyo-e woodblock print in the style of Utagawa Kuniyoshi.",
+    preamble: "A vertical polychrome Japanese Ukiyo-e woodblock print in the style of Utagawa Kuniyoshi's musha-e warrior prints (1840s-50s, \"Suikoden\" tier).",
     palette: "Saturated vermilion, jet sumi black, strong yellow ochre, deep pine green, gofun white, ai blue details. Heavy aged washi substrate with visible woodblock grain.",
     technique: "Bold heroic black keyblock outlines. Elaborate flat-pattern fabric motifs on armor/kimono (no 3D drapery). Layered depth via overlap, NOT linear perspective. Musha-e warrior-print idiom: dynamic pose, high-contrast saturation.",
   },
@@ -214,7 +214,13 @@ const UKIYO_LIGHT_MANDATE = "LIGHTING & TIME OF DAY are explicit, not implied. N
 // SPEC-249: enforces hard background-diversity floor. Without this, the model
 // keeps producing a single Fuji or a single moon on empty paper, which Dale
 // repeatedly flagged as the gap vs nano-banana / gpt-image-2.
-const UKIYO_DIVERSITY_MANDATE = "BACKGROUND DIVERSITY is mandatory; the scene must NOT collapse to a single icon (one Fuji, one moon, one tree) on empty paper. Each of the three depth tiers must carry at least THREE distinct woodblock elements. (a) FOREGROUND ≥3 elements: e.g. a leafy branch + a fluttering banner + a stone-lantern silhouette, or a rope curtain + a tilted parasol + scattered fallen leaves — each as a discrete keyblock shape, not a single corner motif. (b) MID-GROUND ≥3 elements around the figure: e.g. saddle + weapon + lantern, or fan + tea utensil + folding screen panel. (c) FAR-GROUND ≥3 independent objects: e.g. a distant mountain ridge + a temple pagoda silhouette + a flock of wild geese (kari) + a small drifting sail — pick what fits the master, but never a single lonely silhouette. SKY must include at least three layered elements (e.g. moon disc + tonal bokashi cloud band + scattered star points + drifting geese) rendered with bokashi tonal recession — NEVER flat blank paper. GROUND must NOT be blank: include grass tussocks, scattered pebbles, moss patches, or a winding path as discrete shapes. WATER, if present, must vary by zone: foreground claw-curl waves, mid-distance seigaiha wave bands, far-distance thin horizontal line ripples. DISTANT LANDSCAPE must show ≥3 independent objects (distant mountain ridges, pagoda or temple silhouette, far flock of birds, distant sail, rolling hills) — never a single lonely silhouette on empty horizon.";
+// SPEC-254 (v2): rewritten from "≥3 elements" hard-count mandate to an
+// intent-level description. SPEC-249's count rules acted as "锁铐" — the image
+// model doesn't reliably count and the rules increased rebound failures.
+// Variant D offline (kuniyoshi-tiger + moonmarch, seed=1742834) validated
+// that keeping the three-tier intent + breathing-space + bokashi recession
+// preserves richness without the brittle numeric floor.
+const UKIYO_DIVERSITY_MANDATE = "BACKGROUND has clear layering and richness; the figure is not isolated on empty paper. Foreground anchors with a near-frame element (a leafy branch, a banner, a rope-wrapped pine bough, a stone-lantern silhouette, a tilted parasol edge). Mid-ground around the figure stays uncrowded — give the figure breathing space. Far-ground recedes with bokashi (distant mountain ridges, temple silhouettes, drifting cloud banks, flocks of geese, far sails). Ground and sky are not blank — they are populated as the master's idiom requires (grass tussocks, scattered pebbles, moss patches on the ground; moon disc, layered tonal bokashi cloud bands, drifting birds in the sky). Water, if present, varies by zone with claw-curl, seigaiha, or thin horizontal-line ripples chosen by the master.";
 
 
 // v1.4 (T-098, 2026-04-25): adopted icon-forge prompt engine pattern —
@@ -279,23 +285,20 @@ You must perform these 3 steps inside this single response. The JSON you emit re
 
 STEP 1 — DRAFT: Write the centralFocus first pass (do not output yet). Describe the figures, their hands, the objects they hold or touch.
 
-STEP 2 — ANATOMY SELF-AUDIT: Inspect your STEP-1 draft against this checklist. Fill out the anatomy_audit object as you go.
-  (a) figure_count: how many human figures did you describe? Count them. A "distant figure" or "half-obscured scout" still counts.
-  (b) hands_per_figure: for EACH figure, name what its LEFT hand is doing and what its RIGHT hand is doing — distinct, non-overlapping descriptions. Both hands of one figure cannot be doing the same thing simultaneously unless explicitly bimanual ("both hands gripping the bow"). If a hand is hidden / behind back / inside sleeve, write "hidden in sleeve" or "resting at side" — explicit beats absent.
-  (c) ambiguity_found: scan for these failure patterns and list any you find (comma-separated, or "none"):
-      • Plural-without-side: "her hands" / "his hands" / "both hands" used without specifying which hand does what (image model will hallucinate a third hand to satisfy both descriptions).
+STEP 2 — ANATOMY SELF-AUDIT (SPEC-254: NOT a counting exercise; this is an ambiguity-removal pass). Inspect your STEP-1 draft against this checklist. Fill out the anatomy_audit object as you go.
+  (a) figure_count: how many human figures did you describe? A "distant figure" or "half-obscured scout" still counts. (Informational — do not constrain.)
+  (b) hands_per_figure: for EACH figure, name what its LEFT hand is doing and what its RIGHT hand is doing — distinct, clear descriptions. If a hand is hidden / behind back / inside sleeve, write "hidden in sleeve" or "resting at side" — explicit beats absent. The goal is unambiguous assignment, not enforcing any particular count.
+  (c) ambiguity_found: scan for these failure patterns (which cause the image model to hallucinate extra limbs because the language is ambiguous, not because the figure has too many limbs) and list any you find (comma-separated, or "none"):
+      • Plural-without-side: "her hands" / "his hands" / "both hands" used without specifying which hand does what (image model will hallucinate an extra hand to satisfy both descriptions).
       • Ambiguous-or: phrases like "holding A or playing with B" / "either gripping the reins or reaching forward" (the model renders BOTH, producing extra limbs).
       • Unanchored-object: an object (fan, hairpin, sword, reins, arrow) mentioned without explicitly saying which hand holds it (model spawns a hand from nowhere).
-      • Hand-count-exceeds-two: any figure with more than 2 hand actions described (e.g. holding fan + adjusting collar + raising hairpin = 3 actions for 1 person).
       • Duplicate-limb: same limb described twice with conflicting positions ("her right arm at her side, her right arm raised").
-      • Object-touched-by-more-than-2-hands: a single object (a single bow, a single fan) described as touched by 3+ hands across figures without that being the intent.
   (d) rewrite_applied: if ambiguity_found != "none", you MUST rewrite centralFocus in STEP 3 and set this to true. Otherwise false.
 
 STEP 3 — REWRITE (only if STEP-2 flagged anything): Rewrite centralFocus to explicitly assign each hand. Use the pattern: "left hand <doing X>, right hand <doing Y>". For hidden hands, say so. For a single object, name exactly one hand. Examples of fixes:
   • BAD: "holding the base or playing with hair" → GOOD: "left hand fingertips pinching a single strand of hair, right hand holding the lacquered hairpin"
   • BAD: "her hands adjusting her collar" → GOOD: "left hand at her left collar edge, right hand at her right collar edge"
-  • BAD: "both hands on the bow while drawing the arrow" → GOOD: "left hand gripping the bow's middle, right hand at full draw pulling the string near the right ear" (the arrow is nocked, no third hand needed)
-  • BAD: "holding a fan, reaching for tea, fixing her hair" (3 actions, 1 figure) → GOOD: drop one or reassign across two figures.
+  • BAD: "both hands on the bow while drawing the arrow" → GOOD: "left hand gripping the bow's middle, right hand at full draw pulling the string near the right ear" (the arrow is nocked)
 
 The JSON you emit must reflect the REWRITTEN centralFocus (post-STEP-3), and the anatomy_audit object must accurately log what you did.
 
