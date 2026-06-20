@@ -500,6 +500,8 @@ export async function synthesizePrompt(
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
+        // SPEC-285 迁移#2：prompt 合成场景 usecase（网关自动发现 + 允许 dashboard 热切，不设 override 时仍用 body.model）
+        "x-llm-usecase": "prompt-gen",
       },
       body: JSON.stringify(requestBody),
     });
@@ -591,6 +593,8 @@ export async function generateIcon(
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
+        // SPEC-285 迁移#2：浮世绘图像生成场景 usecase
+        "x-llm-usecase": "image-gen",
       },
       body: JSON.stringify({
         model: DASHSCOPE_MODEL,

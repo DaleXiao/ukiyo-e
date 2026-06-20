@@ -81,6 +81,8 @@ describe("SPEC-163 LLM gateway: URL + auth invariants", () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe(`${GATEWAY}${CHAT_PATH}`);
     expect(init.headers.Authorization).toBe(`Bearer ${TOKEN}`);
+    // SPEC-285 迁移#2：prompt 合成带 x-llm-usecase 供网关发现场景
+    expect(init.headers["x-llm-usecase"]).toBe("prompt-gen");
     expect(init.method).toBe("POST");
   });
 
@@ -96,6 +98,8 @@ describe("SPEC-163 LLM gateway: URL + auth invariants", () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe(`${GATEWAY}${IMAGE_PATH}`);
     expect(init.headers.Authorization).toBe(`Bearer ${TOKEN}`);
+    // SPEC-285 迁移#2：图像生成带 x-llm-usecase
+    expect(init.headers["x-llm-usecase"]).toBe("image-gen");
   });
 });
 
