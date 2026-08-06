@@ -74,6 +74,7 @@ interface QueueTask {
   description: string;
   ip: string;
   isTestMode: boolean;
+  testRemaining?: number;
   promptModel: string;
   // v1.1 (T-079 F3): user-selected master from 4-chip UI. Always one of
   // the 4 valid StyleWords; defaults to 'hokusai' (Cindy spec). Worker
@@ -100,6 +101,10 @@ interface SSEWriter {
 // --- Constants ---
 
 const DAILY_LIMIT = 5;
+// Dale 2026-08-06: keep ?test for real end-to-end testing, but cap its
+// paid output globally. Ukiyo-e generates one image per queued task.
+const TEST_DAILY_IMAGE_LIMIT = 100;
+const TEST_IMAGES_PER_TASK = 1;
 const KIMI_MODEL = "qwen3.7-max"; // SPEC-235 followup: prompt LLM 升 qwen3.7-max(生图模型 qwen-image-2.0-pro 不变)
 // SPEC-249: lock to dated snapshot. Offline A/B/C eval in tmp/ukiyo-eval/
 // (qwen-image-2.0-pro-2026-04-22 + 3-tier + diversity prompt) — Dale picked B,
@@ -677,8 +682,7 @@ export async function generateIcon(
 // --- Durable Object: GenerationQueue ---
 
 export class GenerationQueue {
-  // @ts-expect-error: kept for future state hydration
-  private _state: DurableObjectState;
+  private state: DurableObjectState;
   private queue: QueueTask[] = [];
   private sseClients: Map<string, SSEWriter[]> = new Map();
   private completedTasks: Map<string, QueueTask> = new Map();
@@ -688,7 +692,7 @@ export class GenerationQueue {
   private static readonly DASHSCOPE_COOLDOWN_MS = 3000;
 
   constructor(state: DurableObjectState, env: Env) {
-    this._state = state;
+    this.state = state;
     this.env = env;
   }
 
@@ -706,6 +710,10 @@ export class GenerationQueue {
 
     if (path === "/status" && request.method === "GET") {
       return this.handleStatus(request);
+    }
+
+    if (path === "/test-quota" && request.method === "GET") {
+      return this.handleTestQuota();
     }
 
     return new Response("Not Found", { status: 404 });
@@ -736,11 +744,29 @@ export class GenerationQueue {
       );
     }
 
+    let testRemaining: number | undefined;
+    if (body.isTestMode) {
+      const budget = await this.reserveTestImages(TEST_IMAGES_PER_TASK);
+      if (!budget.allowed) {
+        return jsonResponse(
+          {
+            error: "test_daily_limit",
+            message: `测试模式每天最多生成 ${TEST_DAILY_IMAGE_LIMIT} 张图片，请明天再试`,
+            remaining: budget.remaining,
+            total: TEST_DAILY_IMAGE_LIMIT,
+          },
+          429
+        );
+      }
+      testRemaining = budget.remaining;
+    }
+
     const task: QueueTask = {
       taskId: body.taskId,
       description: body.description,
       ip: body.ip,
       isTestMode: body.isTestMode,
+      testRemaining,
       promptModel: body.promptModel || KIMI_MODEL,
       master: body.master,
       status: "queued",
@@ -757,6 +783,32 @@ export class GenerationQueue {
     }
 
     return jsonResponse({ taskId: task.taskId, position }, 202);
+  }
+
+  private testBudgetKey(now = new Date()): string {
+    return `test-images:${now.toISOString().slice(0, 10)}`;
+  }
+
+  /** Reserve before enqueue so concurrent test requests cannot exceed spend. */
+  private async reserveTestImages(count: number): Promise<{ allowed: boolean; remaining: number }> {
+    const key = this.testBudgetKey();
+    return this.state.storage.transaction(async (tx) => {
+      const used = (await tx.get<number>(key)) ?? 0;
+      if (used + count > TEST_DAILY_IMAGE_LIMIT) {
+        return { allowed: false, remaining: Math.max(0, TEST_DAILY_IMAGE_LIMIT - used) };
+      }
+      const next = used + count;
+      await tx.put(key, next);
+      return { allowed: true, remaining: TEST_DAILY_IMAGE_LIMIT - next };
+    });
+  }
+
+  private async handleTestQuota(): Promise<Response> {
+    const used = (await this.state.storage.get<number>(this.testBudgetKey())) ?? 0;
+    return jsonResponse({
+      remaining: Math.max(0, TEST_DAILY_IMAGE_LIMIT - used),
+      total: TEST_DAILY_IMAGE_LIMIT,
+    });
   }
 
   private handleStream(request: Request): Response {
@@ -932,7 +984,7 @@ export class GenerationQueue {
 
         // Step 4: Increment rate limit (deferred billing)
         const remaining = task.isTestMode
-          ? 99
+          ? (task.testRemaining ?? 0)
           : await incrementRateLimit(this.env.RATE_LIMIT, task.ip);
         task.remaining = remaining;
 
@@ -1229,10 +1281,8 @@ async function handleQuota(
   const isTestMode = url.searchParams.has("test");
 
   if (isTestMode) {
-    return new Response(JSON.stringify({ remaining: 99, total: 99 }), {
-      status: 200,
-      headers: { "Content-Type": "application/json", ...CORS_HEADERS },
-    });
+    const doId = env.GENERATION_QUEUE.idFromName("singleton");
+    return env.GENERATION_QUEUE.get(doId).fetch("https://do/test-quota");
   }
 
   const ip = getClientIP(request);
