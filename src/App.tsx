@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useT, toggleLang } from './i18n'
+import { parseSseBusinessError } from './sse-error'
 
 // --- Types ---
 
@@ -432,12 +433,13 @@ export default function App() {
     })
 
     es.addEventListener('error', (e) => {
-      try {
-        const data = JSON.parse((e as MessageEvent).data)
-        setError(data.message || t('err.generateFailed'))
-      } catch {
-        setError(t('err.connectionBroken'))
-      }
+      // `event: error` from the server is a MessageEvent. A native transport
+      // failure is a plain Event and must fall through to es.onerror so the
+      // reconnect path retains the task id and can retry.
+      const businessError = parseSseBusinessError(e)
+      if (!businessError) return
+
+      setError(businessError.message || t('err.generateFailed'))
       setPhase('error')
       setLoading(false)
       es.onerror = null
