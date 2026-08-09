@@ -125,7 +125,10 @@ const CORS_HEADERS: Record<string, string> = {
 };
 
 const MAX_QUEUE_SIZE = 10;
-const TASK_TIMEOUT_MS = 120_000;
+// qwen3.8-max prompt synthesis + qwen-image-3.0-pro generation can each
+// legitimately take ~2 minutes. This is an end-to-end queue budget, not the
+// per-upstream timeout enforced by api-llm-worker.
+const TASK_TIMEOUT_MS = 420_000;
 
 // Origin allowlist — only these front-ends may call the mutating endpoints.
 // Read endpoints (quota) stay open so third-party status dashboards / docs can
