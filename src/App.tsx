@@ -49,25 +49,19 @@ const TEST_PARAM = _params.has('test') ? '?test' : ''
 // Cloudflare Turnstile site key (public, safe to ship in bundle).
 const TURNSTILE_SITE_KEY = '0x4AAAAAADCaJQDyyQeiqkiM'
 
-// Run a one-shot invisible Turnstile challenge; returns the token or throws.
-// The token is single-use — request a fresh one for every /api/generate call.
+// Managed Turnstile stays visually absent for low-risk users (`interaction-only`)
+// but has a real, clickable 300×65 host when Cloudflare asks for interaction.
 function getTurnstileToken(): Promise<string> {
   return new Promise((resolve, reject) => {
     // @ts-expect-error — turnstile is loaded via index.html <script>
     const ts = window.turnstile
-    if (!ts) {
-      reject(new Error('turnstile not loaded'))
-      return
-    }
-    // Turnstile invisible mode requires an actually-rendered container
-    // (display:none breaks the challenge). Use off-screen positioning with
-    // zero size + aria-hidden so it's invisible to users but live in layout.
-    const host = document.createElement('div')
-    host.setAttribute('aria-hidden', 'true')
-    host.style.cssText =
-      'position:fixed;bottom:0;right:0;width:0;height:0;overflow:hidden;pointer-events:none;opacity:0;'
-    document.body.appendChild(host)
+    if (!ts) { reject(new Error('turnstile not loaded')); return }
 
+    const host = document.createElement('div')
+    host.setAttribute('aria-label', '安全验证')
+    host.style.cssText =
+      'position:fixed;right:20px;bottom:20px;z-index:9999;width:300px;min-height:65px;pointer-events:auto;'
+    document.body.appendChild(host)
     let settled = false
     const done = (fn: () => void) => {
       if (settled) return
@@ -75,14 +69,12 @@ function getTurnstileToken(): Promise<string> {
       try { document.body.removeChild(host) } catch {}
       fn()
     }
-    // Hard safety timeout so the UI never hangs on 准备中 if Turnstile
-    // hangs silently (adblocker / network / script not yet loaded).
-    const timer = setTimeout(() => done(() => reject(new Error('turnstile timeout (10s)'))), 10_000)
-
+    const timer = setTimeout(() => done(() => reject(new Error('turnstile timeout'))), 60_000)
     try {
       ts.render(host, {
         sitekey: TURNSTILE_SITE_KEY,
-        size: 'invisible',
+        size: 'normal',
+        appearance: 'interaction-only',
         callback: (token: string) => { clearTimeout(timer); done(() => resolve(token)) },
         'error-callback': () => { clearTimeout(timer); done(() => reject(new Error('turnstile error'))) },
         'timeout-callback': () => { clearTimeout(timer); done(() => reject(new Error('turnstile timeout'))) },
@@ -92,6 +84,20 @@ function getTurnstileToken(): Promise<string> {
       done(() => reject(e as Error))
     }
   })
+}
+
+async function establishTrustedSession(): Promise<void> {
+  const turnstileToken = await getTurnstileToken()
+  const res = await fetch(`${API_BASE}/session`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ turnstileToken }),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({})) as Partial<ErrorResponse>
+    throw new Error(data.message || '人机验证未通过，请重试')
+  }
 }
 
 // T-079 B2: polling cadence used by the visibilitychange fallback when SSE is
@@ -226,7 +232,7 @@ export default function App() {
 
   async function fetchQuota() {
     try {
-      const res = await fetch(`${API_BASE}/quota${TEST_PARAM}`)
+      const res = await fetch(`${API_BASE}/quota${TEST_PARAM}`, { credentials: 'include' })
       if (res.ok) {
         const data: QuotaResponse = await res.json()
         setRemaining(data.remaining)
@@ -511,23 +517,21 @@ export default function App() {
     cleanup()
 
     try {
-      let turnstileToken = ''
-      try {
-        turnstileToken = await getTurnstileToken()
-      } catch (e) {
-        // Soft-fail: if Turnstile can't be reached (adblocker, offline), we
-        // still attempt the call; worker will reject with 403 if it requires
-        // the token. This keeps the failure message clean.
-        console.warn('turnstile unavailable, calling without token:', e)
-      }
-
-      const res = await fetch(`${API_BASE}/generate${TEST_PARAM}`, {
+      const sendGenerate = () => fetch(`${API_BASE}/generate${TEST_PARAM}`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        // T-079 F3: include user-selected master in the body so worker
-        // skips its old "LLM picks 2 masters" step and uses this one.
-        body: JSON.stringify({ description: trimmed, master, turnstileToken }),
+        body: JSON.stringify({ description: trimmed, master }),
       })
+
+      let res = await sendGenerate()
+      if (res.status === 401 && !TEST_PARAM) {
+        const data = await res.clone().json().catch(() => ({})) as Partial<ErrorResponse>
+        if (data.error === 'verification_required') {
+          await establishTrustedSession()
+          res = await sendGenerate() // one retry only
+        }
+      }
 
       if (res.status === 429) {
         const data: ErrorResponse = await res.json()
