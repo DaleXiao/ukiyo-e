@@ -656,7 +656,10 @@ export async function synthesizePrompt(
   const requestBody: KimiChatRequest = {
     model,
     temperature: 0.8,
-    enable_thinking: true,
+    // Prompt slot extraction is a constrained structured rewrite, not a
+    // reasoning task. Thinking on qwen3.8-max regularly crosses the 125s
+    // upstream edge limit before image generation even starts.
+    enable_thinking: false,
     messages: [
       { role: "system", content: buildKimiSystemPrompt(master) },
       { role: "user", content: description },
