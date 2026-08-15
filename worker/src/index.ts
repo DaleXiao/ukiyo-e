@@ -101,7 +101,7 @@ interface SSEWriter {
 
 // --- Constants ---
 
-const DAILY_LIMIT = 5;
+export const DAILY_LIMIT = 5;
 // Dale 2026-08-06: keep ?test for real end-to-end testing, but cap its
 // paid output globally. Ukiyo-e generates one image per queued task.
 const TEST_DAILY_IMAGE_LIMIT = 100;
@@ -141,8 +141,8 @@ const ALLOWED_ORIGINS = new Set<string>([
 ]);
 
 // Short-burst rate limit (IP-scoped, in addition to the daily quota).
-const BURST_WINDOW_SECONDS = 60;
-const BURST_LIMIT = 3;
+export const BURST_WINDOW_SECONDS = 60;
+export const BURST_LIMIT = 3;
 
 // T-079 B2: per-task result cache TTL for the polling fallback. 5 minutes is
 // the SPEC.md value (long enough for iOS Safari lock-screen reconnect, short
@@ -369,26 +369,26 @@ function getClientIP(request: Request): string {
   );
 }
 
-function getTodayKey(ip: string): string {
+export function getTodayKey(ip: string): string {
   const today = new Date().toISOString().slice(0, 10);
   return `limit:${ip}:${today}`;
 }
 
-const SESSION_COOKIE = "trusted_session";
-const SESSION_CONTEXT = "trusted-session-v1";
-const POW_CONTEXT = "pow-challenge-v1";
-const POW_DIFFICULTY = 16;
-const POW_TTL_MS = 2 * 60_000;
+export const SESSION_COOKIE = "trusted_session";
+export const SESSION_CONTEXT = "trusted-session-v1";
+export const POW_CONTEXT = "pow-challenge-v1";
+export const POW_DIFFICULTY = 16;
+export const POW_TTL_MS = 2 * 60_000;
 
-type TrustedSession = { sid: string; exp: number };
+export type TrustedSession = { sid: string; exp: number };
 
-function base64Url(bytes: Uint8Array): string {
+export function base64Url(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
-function fromBase64Url(value: string): Uint8Array {
+export function fromBase64Url(value: string): Uint8Array {
   const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
   const binary = atob(normalized + "=".repeat((4 - normalized.length % 4) % 4));
   return Uint8Array.from(binary, (c) => c.charCodeAt(0));
@@ -400,7 +400,7 @@ async function sessionKey(secret: string): Promise<CryptoKey> {
   );
 }
 
-async function issueTrustedSession(secret: string): Promise<{ value: string; session: TrustedSession }> {
+export async function issueTrustedSession(secret: string): Promise<{ value: string; session: TrustedSession }> {
   const now = Date.now();
   const nextUtcDay = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate() + 1);
   const session: TrustedSession = { sid: crypto.randomUUID(), exp: Math.min(now + 86_400_000, nextUtcDay) };
@@ -410,7 +410,7 @@ async function issueTrustedSession(secret: string): Promise<{ value: string; ses
   return { value: `${payload}.${base64Url(signature)}`, session };
 }
 
-async function verifyTrustedSession(request: Request, secret?: string): Promise<TrustedSession | null> {
+export async function verifyTrustedSession(request: Request, secret?: string): Promise<TrustedSession | null> {
   if (!secret) return null;
   const raw = request.headers.get("Cookie")?.split(";").map((v) => v.trim())
     .find((v) => v.startsWith(`${SESSION_COOKIE}=`))?.slice(SESSION_COOKIE.length + 1);
@@ -431,7 +431,7 @@ async function verifyTrustedSession(request: Request, secret?: string): Promise<
   }
 }
 
-function sessionLimitKey(sessionId: string): string {
+export function sessionLimitKey(sessionId: string): string {
   const today = new Date().toISOString().slice(0, 10);
   return `session-limit:${sessionId}:${today}`;
 }
@@ -441,12 +441,12 @@ async function getCount(kv: KVNamespace, key: string): Promise<number> {
   return raw ? parseInt(raw, 10) || 0 : 0;
 }
 
-async function checkSessionLimit(kv: KVNamespace, sessionId: string): Promise<{ allowed: boolean; remaining: number }> {
+export async function checkSessionLimit(kv: KVNamespace, sessionId: string): Promise<{ allowed: boolean; remaining: number }> {
   const count = await getCount(kv, sessionLimitKey(sessionId));
   return { allowed: count < DAILY_LIMIT, remaining: Math.max(0, DAILY_LIMIT - count) };
 }
 
-async function incrementSessionLimit(kv: KVNamespace, sessionId: string): Promise<number> {
+export async function incrementSessionLimit(kv: KVNamespace, sessionId: string): Promise<number> {
   const key = sessionLimitKey(sessionId);
   const next = await getCount(kv, key) + 1;
   await kv.put(key, String(next), { expirationTtl: 86400 });
@@ -455,18 +455,18 @@ async function incrementSessionLimit(kv: KVNamespace, sessionId: string): Promis
 
 type PowPayload = { nonce: string; exp: number; ipTag: string };
 
-async function hmacValue(secret: string, context: string, payload: string): Promise<string> {
+export async function hmacValue(secret: string, context: string, payload: string): Promise<string> {
   const bytes = new Uint8Array(await crypto.subtle.sign(
     "HMAC", await sessionKey(secret), new TextEncoder().encode(`${context}.${payload}`)
   ));
   return base64Url(bytes);
 }
 
-async function ipTag(secret: string, ip: string): Promise<string> {
+export async function ipTag(secret: string, ip: string): Promise<string> {
   return (await hmacValue(secret, "pow-ip-v1", ip)).slice(0, 16);
 }
 
-async function issuePowChallenge(request: Request, env: Env): Promise<Response> {
+export async function issuePowChallenge(request: Request, env: Env): Promise<Response> {
   if (!env.TURNSTILE_SECRET) return jsonResponse({ error: "verification_unavailable" }, 503);
   const payload: PowPayload = {
     nonce: crypto.randomUUID(),
@@ -478,14 +478,14 @@ async function issuePowChallenge(request: Request, env: Env): Promise<Response> 
   return jsonResponse({ challenge: `${encoded}.${signature}`, difficulty: POW_DIFFICULTY }, 200);
 }
 
-function hasLeadingZeroBits(bytes: Uint8Array, bits: number): boolean {
+export function hasLeadingZeroBits(bytes: Uint8Array, bits: number): boolean {
   const full = Math.floor(bits / 8);
   for (let i = 0; i < full; i++) if (bytes[i] !== 0) return false;
   const remainder = bits % 8;
   return remainder === 0 || (bytes[full] & (0xff << (8 - remainder))) === 0;
 }
 
-async function verifyPow(
+export async function verifyPow(
   request: Request, env: Env, challenge: string, counter: number
 ): Promise<boolean> {
   if (!env.TURNSTILE_SECRET || !Number.isSafeInteger(counter) || counter < 0 || counter > 4_194_304) return false;
@@ -513,7 +513,7 @@ async function verifyPow(
   }
 }
 
-async function handleSessionBootstrap(request: Request, env: Env): Promise<Response> {
+export async function handleSessionBootstrap(request: Request, env: Env): Promise<Response> {
   let body: { turnstileToken?: string; powChallenge?: string; powCounter?: number };
   try { body = await request.json() as typeof body; }
   catch { return jsonResponse({ error: "invalid_input", message: "无效的验证请求" }, 400); }
@@ -537,7 +537,7 @@ async function handleSessionBootstrap(request: Request, env: Env): Promise<Respo
 
 // --- Rate limiting (check only, no increment) ---
 
-async function checkBurst(
+export async function checkBurst(
   kv: KVNamespace,
   ip: string
 ): Promise<{ allowed: boolean; retryAfter?: number }> {
@@ -584,7 +584,7 @@ async function verifyTurnstile(token: string, env: Env, ip: string): Promise<boo
   }
 }
 
-async function checkRateLimit(
+export async function checkRateLimit(
   kv: KVNamespace,
   ip: string
 ): Promise<{ allowed: boolean; remaining: number }> {
@@ -599,7 +599,7 @@ async function checkRateLimit(
   return { allowed: true, remaining: DAILY_LIMIT - count };
 }
 
-async function incrementRateLimit(
+export async function incrementRateLimit(
   kv: KVNamespace,
   ip: string
 ): Promise<number> {
@@ -615,7 +615,7 @@ async function incrementRateLimit(
   return DAILY_LIMIT - newCount;
 }
 
-async function getRemainingQuota(
+export async function getRemainingQuota(
   kv: KVNamespace,
   ip: string
 ): Promise<number> {
@@ -1316,7 +1316,7 @@ function generateTaskId(): string {
   return `task_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-async function handleGenerate(
+export async function handleGenerate(
   request: Request,
   env: Env
 ): Promise<Response> {
